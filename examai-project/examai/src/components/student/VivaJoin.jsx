@@ -255,25 +255,33 @@ export default function VivaJoin() {
       if (!peerRef.current) createPeer();
     });
 
-    // Receive offer from admin
+    var pendingCandidates = [];
+    var remoteSet = false;
+
+    // Receive offer from admin — set remote, send answer, drain buffered candidates
     sock.on('offer', async function(data) {
       adminSocketId.current = data.from;
       if (!peerRef.current) createPeer();
       var pc = peerRef.current;
       try {
         await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+        remoteSet = true;
+        // Drain any ICE candidates that arrived before the offer
+        for (var c of pendingCandidates) { try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch(ex) {} }
+        pendingCandidates = [];
         var answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
+        console.log('[Student] Answer sent to admin', data.from);
         sock.emit('answer', { viva_id: vid, to: data.from, answer: pc.localDescription });
-      } catch(e) { console.warn('answer failed', e); }
+      } catch(e) { console.warn('[Student] answer failed:', e); }
     });
 
-    // Receive ICE candidate from admin
+    // Receive ICE candidate from admin — buffer if offer not yet received
     sock.on('ice-candidate', async function(data) {
+      if (!data.candidate) return;
+      if (!remoteSet) { pendingCandidates.push(data.candidate); return; }
       var pc = peerRef.current;
-      if (pc && data.candidate) {
-        try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch(e) {}
-      }
+      if (pc) { try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch(e) {} }
     });
 
     sock.on('session-ended', function() {
@@ -292,7 +300,10 @@ export default function VivaJoin() {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
-      ]
+        { urls: 'stun:stun3.l.google.com:19302' },
+        { urls: 'stun:stun4.l.google.com:19302' },
+      ],
+      iceCandidatePoolSize: 10,
     });
     peerRef.current = pc;
     if (streamRef.current) streamRef.current.getTracks().forEach(function(t){ pc.addTrack(t, streamRef.current); });
@@ -315,8 +326,14 @@ export default function VivaJoin() {
       if (e.candidate && sock) sock.emit('ice-candidate', { viva_id: vid, to: adminSocketId.current, candidate: e.candidate });
     };
     pc.onconnectionstatechange = function() {
+      console.log('[Student] Connection:', pc.connectionState);
       if (pc.connectionState === 'connected') setAdminConnected(true);
       if (pc.connectionState === 'failed') { try { pc.restartIce(); } catch(er){} }
+    };
+
+    pc.oniceconnectionstatechange = function() {
+      console.log('[Student] ICE:', pc.iceConnectionState);
+      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') setAdminConnected(true);
     };
     return pc;
   }
@@ -555,12 +572,20 @@ export default function VivaJoin() {
         {/* Examiner's live video via WebRTC */}
         <div className="card" style={{padding:12}}>
           <div style={{position:'relative',borderRadius:8,overflow:'hidden',background:'#111',lineHeight:0}}>
-            <video ref={adminVidRef} autoPlay playsInline style={{width:'100%',height:220,objectFit:'cover',display:'block'}}/>
+            <video ref={adminVidRef} autoPlay playsInline style={{width:'100%',height:220,objectFit:'cover',display:'block'}}
+              ref={function(el) {
+                adminVidRef.current = el;
+                if (el) { el.autoplay = true; el.playsInline = true; }
+              }}
+            />
             {!adminConnected && (
               <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:8}}>
                 <div style={{fontSize:'2.8rem',opacity:.25}}>👨‍🏫</div>
                 <div style={{fontSize:'0.75rem',color:'#4b5563',fontWeight:600}}>Waiting for examiner…</div>
-                <div style={{fontSize:'0.65rem',color:'#374151'}}>Audio &amp; video will connect shortly</div>
+                <button onClick={function(){ if(peerRef.current){try{peerRef.current.close();}catch(e){} peerRef.current=null;} setupStudentWebRTC(); }}
+                  style={{padding:'4px 12px',borderRadius:6,border:'none',background:'rgba(124,58,237,.4)',color:'#a78bfa',fontSize:'0.65rem',fontWeight:700,cursor:'pointer',marginTop:4}}>
+                  🔄 Reconnect
+                </button>
               </div>
             )}
             {adminConnected && (

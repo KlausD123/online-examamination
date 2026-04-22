@@ -361,53 +361,84 @@ export default function VivaRoom() {
   async function createOfferForStudent(studentSocketId) {
     var vivaId = savedVivaRef.current ? savedVivaRef.current.viva_id : null;
     var sock = socketRef.current;
-    if (!vivaId || !streamRef.current || !sock) return;
+    if (!vivaId || !sock) return;
 
-    // Close old peer if any
     if (peerRef.current) { try { peerRef.current.close(); } catch(e) {} peerRef.current = null; }
+
+    var pendingCandidates = [];
+    var remoteSet = false;
 
     var pc = new RTCPeerConnection({
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
-      ]
+      ],
+      // Allow host candidates (needed for localhost)
+      iceTransportPolicy: 'all',
+      iceCandidatePoolSize: 10,
     });
     peerRef.current = pc;
 
-    streamRef.current.getTracks().forEach(function(t) { pc.addTrack(t, streamRef.current); });
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(function(t) { pc.addTrack(t, streamRef.current); });
+    }
 
     pc.ontrack = function(e) {
       if (!e.streams || !e.streams[0]) return;
       var remoteStream = e.streams[0];
       setStudentConnected(true);
+      store.addToast('Student video connected!', 'success');
       var att = 0;
       var iv2 = setInterval(function() {
         att++;
-        if (att > 30) { clearInterval(iv2); return; }
+        if (att > 50) { clearInterval(iv2); return; }
         if (!studentVidRef.current) return;
         clearInterval(iv2);
         studentVidRef.current.srcObject = remoteStream;
         studentVidRef.current.play().catch(function(){});
-      }, 200);
+      }, 100);
     };
 
     pc.onicecandidate = function(e) {
       if (e.candidate && sock) sock.emit('ice-candidate', { viva_id: vivaId, to: studentSocketId, candidate: e.candidate });
     };
 
-    pc.onconnectionstatechange = function() {
-      if (pc.connectionState === 'connected') setStudentConnected(true);
-      if (pc.connectionState === 'failed') { try { pc.restartIce(); } catch(er) {} }
+    pc.oniceconnectionstatechange = function() {
+      console.log('[Admin] ICE:', pc.iceConnectionState);
+      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') setStudentConnected(true);
+      if (pc.iceConnectionState === 'failed') { try { pc.restartIce(); } catch(er) {} }
     };
 
+    // Re-register answer and ice handlers with buffering
+    sock.off('answer');
+    sock.on('answer', async function(data) {
+      var p = peerRef.current;
+      if (p && p.remoteDescription === null) {
+        try {
+          await p.setRemoteDescription(new RTCSessionDescription(data.answer));
+          remoteSet = true;
+          for (var c of pendingCandidates) { try { await p.addIceCandidate(new RTCIceCandidate(c)); } catch(ex) {} }
+          pendingCandidates = [];
+          console.log('[Admin] Answer set OK');
+        } catch(e) { console.warn('[Admin] setRemoteDescription failed:', e); }
+      }
+    });
+
+    sock.off('ice-candidate');
+    sock.on('ice-candidate', async function(data) {
+      var p = peerRef.current;
+      if (!p || !data.candidate) return;
+      if (!remoteSet) { pendingCandidates.push(data.candidate); }
+      else { try { await p.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch(e) {} }
+    });
+
     try {
-      var offer = await pc.createOffer();
+      var offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
       await pc.setLocalDescription(offer);
+      console.log('[Admin] Offer sent to', studentSocketId);
       sock.emit('offer', { viva_id: vivaId, to: studentSocketId, offer: pc.localDescription });
-    } catch(e) { console.warn('createOffer failed', e); }
+    } catch(e) { console.warn('[Admin] createOffer failed:', e); }
   }
-
-
   async function startFaceDetection() {
     try {
       await loadFaceAPI();
@@ -1105,16 +1136,38 @@ export default function VivaRoom() {
             <div style={{ position: 'relative', borderRadius: 7, overflow: 'hidden', background: '#000', lineHeight: 0 }}>
               <video ref={videoRef} autoPlay muted playsInline style={{ width: '100%', height: 130, objectFit: 'cover', display: 'block' }}/>
               <canvas ref={canvasRef} style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}/>
-              {!camReady && <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><span style={{ fontSize: '0.68rem', color: '#6b7280' }}>Starting…</span></div>}
+              {!camReady && (
+                <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 6 }}>
+                  {faceStatus === 'unavailable'
+                    ? <button onClick={startCamera} style={{ padding: '6px 14px', borderRadius: 7, border: 'none', background: '#7c3aed', color: '#fff', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer' }}>🔓 Grant Camera</button>
+                    : <span style={{ fontSize: '0.68rem', color: '#6b7280' }}>Starting…</span>
+                  }
+                </div>
+              )}
             </div>
-            <div style={{ marginTop: 4, padding: '3px 8px', borderRadius: 4, background: 'rgba(255,255,255,.05)', textAlign: 'center', fontSize: '0.68rem', fontWeight: 700, color: fsColors[faceStatus] || '#9ca3af' }}>{fsLabels[faceStatus] || faceStatus}</div>
+            <div style={{ marginTop: 4, padding: '3px 8px', borderRadius: 4, background: 'rgba(255,255,255,.05)', textAlign: 'center', fontSize: '0.68rem', fontWeight: 700, color: fsColors[faceStatus] || '#9ca3af' }}>
+              {faceStatus === 'unavailable' ? '🔒 Click Grant Camera above' : (fsLabels[faceStatus] || faceStatus)}
+            </div>
           </div>
 
           <div className="card" style={{ padding: 10 }}>
             <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#9ca3af', letterSpacing: 1, marginBottom: 5, textAlign: 'center', fontFamily: 'JetBrains Mono,monospace' }}>🎓 STUDENT</div>
             <div style={{ position: 'relative', borderRadius: 7, overflow: 'hidden', background: '#111', lineHeight: 0 }}>
               <video ref={studentVidRef} autoPlay playsInline style={{ width: '100%', height: 130, objectFit: 'cover', display: 'block' }}/>
-              {!studentConnected && <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 4 }}><span style={{ fontSize: '1.5rem', opacity: .3 }}>👤</span><span style={{ fontSize: '0.65rem', color: '#4b5563' }}>Waiting…</span></div>}
+              {!studentConnected && (
+                <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 4 }}>
+                  <span style={{ fontSize: '1.5rem', opacity: .3 }}>👤</span>
+                  <span style={{ fontSize: '0.65rem', color: '#4b5563' }}>Waiting…</span>
+                  <button onClick={function() {
+                    var room = savedVivaRef.current;
+                    if (!room || !socketRef.current) return;
+                    var vivaId = room.viva_id;
+                    socketRef.current.emit('join-room', { viva_id: vivaId, role: 'admin', name: 'Examiner' });
+                  }} style={{ padding: '3px 8px', borderRadius: 5, border: 'none', background: 'rgba(124,58,237,.35)', color: '#a78bfa', fontSize: '0.6rem', fontWeight: 700, cursor: 'pointer', marginTop: 2 }}>
+                    🔄 Re-connect
+                  </button>
+                </div>
+              )}
               {studentConnected && <div style={{ position: 'absolute', bottom: 4, left: '50%', transform: 'translateX(-50%)', background: 'rgba(22,163,74,.9)', color: '#fff', fontSize: '0.6rem', padding: '2px 8px', borderRadius: 10, fontWeight: 700, whiteSpace: 'nowrap' }}>🟢 Live</div>}
             </div>
             <div style={{ marginTop: 4, fontSize: '0.67rem', color: studentConnected ? '#4ade80' : '#6b7280', textAlign: 'center', fontWeight: 700 }}>{studentConnected ? '🟢 Connected' : '⏳ Waiting…'}</div>
