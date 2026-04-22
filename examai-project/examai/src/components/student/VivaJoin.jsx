@@ -296,48 +296,60 @@ export default function VivaJoin() {
     if (peerRef.current) { try { peerRef.current.close(); } catch(e) {} }
     var vid = roomIdRef.current;
     var sock = socketRef.current;
+
+    // No STUN for localhost
     var pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun3.l.google.com:19302' },
-        { urls: 'stun:stun4.l.google.com:19302' },
-      ],
-      iceCandidatePoolSize: 10,
+      iceServers: [],
+      iceTransportPolicy: 'all',
     });
     peerRef.current = pc;
-    if (streamRef.current) streamRef.current.getTracks().forEach(function(t){ pc.addTrack(t, streamRef.current); });
+
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(function(t) {
+        console.log('[Student] Adding track:', t.kind);
+        pc.addTrack(t, streamRef.current);
+      });
+    }
+
     pc.ontrack = function(e) {
+      console.log('[Student] Got remote track:', e.track.kind);
       if (!e.streams || !e.streams[0]) return;
       var remoteStream = e.streams[0];
       setAdminConnected(true);
-      // Retry attaching until video element is mounted
       var att = 0;
       var iv2 = setInterval(function() {
         att++;
-        if (att > 30) { clearInterval(iv2); return; }
+        if (att > 50) { clearInterval(iv2); return; }
         if (!adminVidRef.current) return;
         clearInterval(iv2);
         adminVidRef.current.srcObject = remoteStream;
-        adminVidRef.current.play().catch(function(){});
-      }, 200);
+        adminVidRef.current.play().catch(function(e){ console.warn('play err', e); });
+        console.log('[Student] Admin video attached');
+      }, 100);
     };
+
     pc.onicecandidate = function(e) {
-      if (e.candidate && sock) sock.emit('ice-candidate', { viva_id: vid, to: adminSocketId.current, candidate: e.candidate });
-    };
-    pc.onconnectionstatechange = function() {
-      console.log('[Student] Connection:', pc.connectionState);
-      if (pc.connectionState === 'connected') setAdminConnected(true);
-      if (pc.connectionState === 'failed') { try { pc.restartIce(); } catch(er){} }
+      if (e.candidate && sock) {
+        console.log('[Student] Sending ICE candidate to admin');
+        sock.emit('ice-candidate', { viva_id: vid, to: adminSocketId.current, candidate: e.candidate });
+      } else if (!e.candidate) {
+        console.log('[Student] ICE gathering complete');
+      }
     };
 
     pc.oniceconnectionstatechange = function() {
-      console.log('[Student] ICE:', pc.iceConnectionState);
+      console.log('[Student] ICE state:', pc.iceConnectionState);
       if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') setAdminConnected(true);
+      if (pc.iceConnectionState === 'failed') { try { pc.restartIce(); } catch(er){} }
     };
+
+    pc.onconnectionstatechange = function() {
+      console.log('[Student] Connection state:', pc.connectionState);
+      if (pc.connectionState === 'connected') setAdminConnected(true);
+    };
+
     return pc;
   }
-
   async function startPeerConnection(adminId) {
     var vid = roomIdRef.current;
     var sock = socketRef.current;

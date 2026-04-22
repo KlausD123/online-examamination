@@ -361,33 +361,38 @@ export default function VivaRoom() {
   async function createOfferForStudent(studentSocketId) {
     var vivaId = savedVivaRef.current ? savedVivaRef.current.viva_id : null;
     var sock = socketRef.current;
-    if (!vivaId || !sock) return;
+    if (!vivaId || !sock) { console.warn('[Admin] No vivaId or socket'); return; }
 
+    console.log('[Admin] Creating offer for student', studentSocketId);
+
+    // Close old peer
     if (peerRef.current) { try { peerRef.current.close(); } catch(e) {} peerRef.current = null; }
 
     var pendingCandidates = [];
     var remoteSet = false;
 
+    // No STUN for localhost — use host candidates only for speed
     var pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-      ],
-      // Allow host candidates (needed for localhost)
+      iceServers: [],
       iceTransportPolicy: 'all',
-      iceCandidatePoolSize: 10,
     });
     peerRef.current = pc;
 
+    // Add local stream tracks
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach(function(t) { pc.addTrack(t, streamRef.current); });
+      streamRef.current.getTracks().forEach(function(t) {
+        console.log('[Admin] Adding track:', t.kind);
+        pc.addTrack(t, streamRef.current);
+      });
+    } else {
+      console.warn('[Admin] No stream available yet');
     }
 
     pc.ontrack = function(e) {
+      console.log('[Admin] Got remote track:', e.track.kind, 'streams:', e.streams.length);
       if (!e.streams || !e.streams[0]) return;
       var remoteStream = e.streams[0];
       setStudentConnected(true);
-      store.addToast('Student video connected!', 'success');
       var att = 0;
       var iv2 = setInterval(function() {
         att++;
@@ -395,47 +400,72 @@ export default function VivaRoom() {
         if (!studentVidRef.current) return;
         clearInterval(iv2);
         studentVidRef.current.srcObject = remoteStream;
-        studentVidRef.current.play().catch(function(){});
+        studentVidRef.current.play().catch(function(e){ console.warn('play err', e); });
+        console.log('[Admin] Student video attached');
       }, 100);
     };
 
     pc.onicecandidate = function(e) {
-      if (e.candidate && sock) sock.emit('ice-candidate', { viva_id: vivaId, to: studentSocketId, candidate: e.candidate });
+      if (e.candidate) {
+        console.log('[Admin] Sending ICE candidate to student');
+        sock.emit('ice-candidate', { viva_id: vivaId, to: studentSocketId, candidate: e.candidate });
+      } else {
+        console.log('[Admin] ICE gathering complete');
+      }
     };
 
     pc.oniceconnectionstatechange = function() {
-      console.log('[Admin] ICE:', pc.iceConnectionState);
-      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') setStudentConnected(true);
-      if (pc.iceConnectionState === 'failed') { try { pc.restartIce(); } catch(er) {} }
+      console.log('[Admin] ICE connection state:', pc.iceConnectionState);
+      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+        setStudentConnected(true);
+      }
     };
 
-    // Re-register answer and ice handlers with buffering
+    pc.onconnectionstatechange = function() {
+      console.log('[Admin] Peer connection state:', pc.connectionState);
+      if (pc.connectionState === 'connected') setStudentConnected(true);
+      if (pc.connectionState === 'failed') {
+        console.warn('[Admin] Connection failed, restarting ICE');
+        try { pc.restartIce(); } catch(er) {}
+      }
+    };
+
+    // Re-register answer handler with candidate buffering
     sock.off('answer');
     sock.on('answer', async function(data) {
+      console.log('[Admin] Received answer from student');
       var p = peerRef.current;
-      if (p && p.remoteDescription === null) {
-        try {
-          await p.setRemoteDescription(new RTCSessionDescription(data.answer));
-          remoteSet = true;
-          for (var c of pendingCandidates) { try { await p.addIceCandidate(new RTCIceCandidate(c)); } catch(ex) {} }
-          pendingCandidates = [];
-          console.log('[Admin] Answer set OK');
-        } catch(e) { console.warn('[Admin] setRemoteDescription failed:', e); }
-      }
+      if (!p) { console.warn('[Admin] No peer for answer'); return; }
+      if (p.remoteDescription) { console.warn('[Admin] Remote desc already set'); return; }
+      try {
+        await p.setRemoteDescription(new RTCSessionDescription(data.answer));
+        remoteSet = true;
+        console.log('[Admin] Remote description set, draining', pendingCandidates.length, 'candidates');
+        for (var c of pendingCandidates) {
+          try { await p.addIceCandidate(new RTCIceCandidate(c)); } catch(ex) { console.warn('candidate err', ex); }
+        }
+        pendingCandidates = [];
+      } catch(e) { console.warn('[Admin] setRemoteDescription failed:', e); }
     });
 
+    // Re-register ICE handler with buffering
     sock.off('ice-candidate');
     sock.on('ice-candidate', async function(data) {
+      if (!data.candidate) return;
       var p = peerRef.current;
-      if (!p || !data.candidate) return;
-      if (!remoteSet) { pendingCandidates.push(data.candidate); }
-      else { try { await p.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch(e) {} }
+      if (!p) return;
+      if (!remoteSet) {
+        console.log('[Admin] Buffering ICE candidate (no remote desc yet)');
+        pendingCandidates.push(data.candidate);
+      } else {
+        try { await p.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch(e) {}
+      }
     });
 
     try {
       var offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
       await pc.setLocalDescription(offer);
-      console.log('[Admin] Offer sent to', studentSocketId);
+      console.log('[Admin] Offer created and sent to', studentSocketId);
       sock.emit('offer', { viva_id: vivaId, to: studentSocketId, offer: pc.localDescription });
     } catch(e) { console.warn('[Admin] createOffer failed:', e); }
   }
