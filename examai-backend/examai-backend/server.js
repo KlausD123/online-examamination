@@ -50,7 +50,7 @@ console.log("DB_USER:", process.env.DB_USER);
 console.log("DB_NAME:", process.env.DB_NAME);
 console.log("DB_PORT:", process.env.DB_PORT);
 console.log("=================");
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
     console.log('\n✅ DExam Backend  →  http://localhost:' + PORT);
     console.log('   Groq AI  : ' + (process.env.GROQ_API_KEY ? '✓ configured' : '✗ not configured'));
     console.log('   Database : ' + process.env.DB_NAME + '@' + process.env.DB_HOST + '\n');
