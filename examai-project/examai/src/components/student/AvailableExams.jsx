@@ -197,15 +197,6 @@ export default function AvailableExams({ navigate }) {
       </div>
     );
   }
-    if (filter === 'All') return true;
-    var st = getExamStatus(e);
-    var studentSt = getStudentStatus(e);
-    if (filter === 'Open') return st.label === 'LIVE NOW' && !studentSt;
-    if (filter === 'Upcoming') return st.label === 'UPCOMING';
-    if (filter === 'Expired') return st.label === 'EXPIRED';
-    if (filter === 'Completed') return studentSt && (studentSt.label === 'COMPLETED' || studentSt.label === 'CHEATED');
-    return true;
-  });
 
   if (loading) return <div className="loading-center"><div className="spinner"></div></div>;
 

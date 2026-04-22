@@ -55,7 +55,6 @@ export default function App() {
         setAuthChecking(false);
       });
     }
-    }
   }, []); // eslint-disable-line
 
   function navigate(key, data) { setPage(key); setPageData(data || null); }
