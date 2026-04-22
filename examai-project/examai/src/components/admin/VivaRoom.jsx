@@ -322,7 +322,6 @@ export default function VivaRoom() {
     var vivaId = savedVivaRef.current ? savedVivaRef.current.viva_id : null;
     if (!vivaId) return;
 
-    // Disconnect existing
     if (socketRef.current) { try { socketRef.current.disconnect(); } catch(e) {} socketRef.current = null; }
 
     var sock = ioClient(SOCKET_URL, { transports: ['websocket', 'polling'] });
@@ -331,6 +330,21 @@ export default function VivaRoom() {
     sock.on('connect', function() {
       console.log('[Admin] Socket connected:', sock.id);
       sock.emit('join-room', { viva_id: vivaId, role: 'admin', name: 'Examiner' });
+    });
+
+    // Server confirms join — NOW safe to send frames
+    sock.on('joined-ack', function() {
+      console.log('[Admin] join-room acknowledged, starting frame relay');
+      // Wait for stream to be ready
+      var w = 0;
+      var wiv = setInterval(function() {
+        w++;
+        if (w > 40) { clearInterval(wiv); return; }
+        if (!streamRef.current) return;
+        clearInterval(wiv);
+        startSendingFrames(sock);
+        startSendingAudio(sock);
+      }, 300);
     });
 
     sock.on('peer-joined', function(data) {
@@ -345,30 +359,26 @@ export default function VivaRoom() {
       if (data.role === 'student') {
         setStudentConnected(false);
         if (studentVidRef.current) {
-          var ctx = studentVidRef.current.getContext('2d');
-          ctx.clearRect(0, 0, studentVidRef.current.width, studentVidRef.current.height);
+          try { studentVidRef.current.getContext('2d').clearRect(0,0,9999,9999); } catch(e) {}
         }
       }
     });
 
-    // Receive student video frame
     sock.on('remote-frame', function(data) {
       if (data.role !== 'student') return;
       var canvas = studentVidRef.current;
       if (!canvas) return;
       var img = new Image();
       img.onload = function() {
-        try {
-          var ctx = canvas.getContext('2d');
-          canvas.width = img.width;
-          canvas.height = img.height;
-          ctx.drawImage(img, 0, 0);
-        } catch(e) {}
+        var ctx = canvas.getContext('2d');
+        if (canvas.width !== img.width) canvas.width = img.width;
+        if (canvas.height !== img.height) canvas.height = img.height;
+        ctx.drawImage(img, 0, 0);
+        if (!studentConnected) setStudentConnected(true);
       };
       img.src = data.frame;
     });
 
-    // Receive student audio
     var adminAudioCtx = null;
     sock.on('remote-audio', function(data) {
       if (data.role !== 'student') return;
@@ -376,59 +386,46 @@ export default function VivaRoom() {
         if (!adminAudioCtx) adminAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
         var buf = adminAudioCtx.createBuffer(1, data.chunk.length, 44100);
         buf.getChannelData(0).set(new Float32Array(data.chunk));
-        var src2 = adminAudioCtx.createBufferSource();
-        src2.buffer = buf;
-        src2.connect(adminAudioCtx.destination);
-        src2.start();
+        var s2 = adminAudioCtx.createBufferSource();
+        s2.buffer = buf; s2.connect(adminAudioCtx.destination); s2.start();
       } catch(e) {}
     });
 
-    sock.on('session-ended', function() { store.addToast('Session ended by student', 'info'); });
-
-    // Start sending frames as soon as stream is available
-    var waitAttempts = 0;
-    var waitStream = setInterval(function() {
-      waitAttempts++;
-      if (waitAttempts > 40) { clearInterval(waitStream); return; } // 20s timeout
-      if (!streamRef.current) return;
-      clearInterval(waitStream);
-      console.log('[Admin] Stream ready, starting frame relay');
-      startSendingFrames(sock, vivaId);
-      startSendingAudio(sock, vivaId);
-    }, 500);
+    sock.on('session-ended', function() { store.addToast('Student ended session', 'info'); });
   }
 
-  function startSendingFrames(sock, vivaId) {
+
+  function startSendingFrames(sock) {
     clearInterval(frameIntervalRef.current);
-    var captureCanvas = document.createElement('canvas');
-    captureCanvas.width = 320; captureCanvas.height = 240;
-    var captureCtx = captureCanvas.getContext('2d');
+    var cap = document.createElement('canvas');
+    cap.width = 320; cap.height = 240;
+    var ctx = cap.getContext('2d');
     var track = streamRef.current && streamRef.current.getVideoTracks()[0];
+
     if (track && window.ImageCapture) {
-      var imageCapture = new ImageCapture(track);
+      var ic = new ImageCapture(track);
       frameIntervalRef.current = setInterval(async function() {
-        if (!sock || !sock.connected) return;
+        if (!sock.connected) return;
         try {
-          var bitmap = await imageCapture.grabFrame();
-          captureCtx.drawImage(bitmap, 0, 0, 320, 240);
-          var frame = captureCanvas.toDataURL('image/jpeg', 0.4);
-          sock.emit('video-frame', frame);
+          var bmp = await ic.grabFrame();
+          ctx.drawImage(bmp, 0, 0, 320, 240);
+          sock.volatile.emit('video-frame', cap.toDataURL('image/jpeg', 0.35));
         } catch(e) {}
-      }, 150);
+      }, 200);
     } else {
-      // Fallback: draw from videoRef (admin's own camera element in DOM)
+      var v = videoRef.current;
       frameIntervalRef.current = setInterval(function() {
-        if (!sock || !sock.connected) return;
-        var v = videoRef.current;
+        if (!sock.connected) return;
+        if (!v) v = videoRef.current;
         if (!v || v.readyState < 2 || v.videoWidth === 0) return;
         try {
-          captureCtx.drawImage(v, 0, 0, 320, 240);
-          var frame = captureCanvas.toDataURL('image/jpeg', 0.4);
-          sock.emit('video-frame', frame);
+          ctx.drawImage(v, 0, 0, 320, 240);
+          sock.volatile.emit('video-frame', cap.toDataURL('image/jpeg', 0.35));
         } catch(e) {}
-      }, 150);
+      }, 200);
     }
   }
+
 
   function startSendingAudio(sock, vivaId) {
     if (!streamRef.current) return;

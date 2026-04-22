@@ -44,6 +44,8 @@ export default function VivaJoin() {
   var pendingIceCandidates = useRef([]); // buffer ICE candidates before remote desc
   var remoteDescSet   = useRef(false);   // has remote description been set
   var masterRef       = useRef(null);     // single 1s interval
+  var frameIntervalRef = useRef(null);   // video frame sending interval
+  var audioProcessorRef = useRef(null); // audio relay processor
   var awayStartRef    = useRef(null);     // timestamp of when student left
   var roomIdRef       = useRef('');
   var sessionRef      = useRef(null);
@@ -242,7 +244,6 @@ export default function VivaJoin() {
     var vid = roomIdRef.current;
     if (!vid) { console.warn('[Student] No room ID'); return; }
 
-    // Disconnect existing socket
     if (socketRef.current) { try { socketRef.current.disconnect(); } catch(e) {} socketRef.current = null; }
 
     var sock = ioClient(SOCKET_URL, { transports: ['websocket', 'polling'] });
@@ -254,7 +255,13 @@ export default function VivaJoin() {
       sock.emit('join-room', { viva_id: vid, role: 'student', name: name });
     });
 
-    // Admin joined — we know they're there, mark connected
+    // Server confirms we joined — NOW safe to start sending frames
+    sock.on('joined-ack', function() {
+      console.log('[Student] join-room acknowledged, starting frame relay');
+      startSendingFrames(sock);
+      startSendingAudio(sock);
+    });
+
     sock.on('peer-joined', function(data) {
       if (data.role === 'admin') {
         console.log('[Student] Admin is in the room');
@@ -262,23 +269,20 @@ export default function VivaJoin() {
       }
     });
 
-    // Receive video frame from admin — draw on canvas
     sock.on('remote-frame', function(data) {
       if (data.role !== 'admin') return;
-      if (!adminVidRef.current) return;
+      var canvas = adminVidRef.current;
+      if (!canvas) return;
       var img = new Image();
       img.onload = function() {
-        var canvas = adminVidRef.current;
-        if (!canvas) return;
         var ctx = canvas.getContext('2d');
-        canvas.width = img.width;
-        canvas.height = img.height;
+        if (canvas.width !== img.width) canvas.width = img.width;
+        if (canvas.height !== img.height) canvas.height = img.height;
         ctx.drawImage(img, 0, 0);
       };
       img.src = data.frame;
     });
 
-    // Admin audio via Web Audio
     var audioCtx = null;
     sock.on('remote-audio', function(data) {
       if (data.role !== 'admin') return;
@@ -287,68 +291,46 @@ export default function VivaJoin() {
         var buf = audioCtx.createBuffer(1, data.chunk.length, 44100);
         buf.getChannelData(0).set(new Float32Array(data.chunk));
         var src = audioCtx.createBufferSource();
-        src.buffer = buf;
-        src.connect(audioCtx.destination);
-        src.start();
+        src.buffer = buf; src.connect(audioCtx.destination); src.start();
       } catch(e) {}
     });
 
-    sock.on('peer-left', function(data) {
-      if (data.role === 'admin') setAdminConnected(false);
-    });
+    sock.on('peer-left', function(data) { if (data.role === 'admin') setAdminConnected(false); });
     sock.on('session-ended', function() { phaseRef.current = 'ended'; setPhase('ended'); });
-    sock.on('disconnect', function() { console.log('[Student] Socket disconnected'); });
-
-    // Start sending our video frames to admin
-    // Start sending frames — wait for stream if not ready yet
-    var waitAttempts = 0;
-    var waitStream = setInterval(function() {
-      waitAttempts++;
-      if (waitAttempts > 40) { clearInterval(waitStream); return; }
-      if (!streamRef.current) return;
-      clearInterval(waitStream);
-      console.log('[Student] Stream ready, starting frame relay');
-      startSendingFrames(sock, vid);
-      startSendingAudio(sock, vid);
-    }, 500);
   }
 
-  var frameIntervalRef = useRef(null);
-  var audioProcessorRef = useRef(null);
 
-  function startSendingFrames(sock, vid) {
+  function startSendingFrames(sock) {
     clearInterval(frameIntervalRef.current);
-    var captureCanvas = document.createElement('canvas');
-    captureCanvas.width = 320; captureCanvas.height = 240;
-    var captureCtx = captureCanvas.getContext('2d');
-    // Use the already-displayed selfVidRef — it's in DOM and playing
-    // Fall back to ImageCapture API if available
+    var cap = document.createElement('canvas');
+    cap.width = 320; cap.height = 240;
+    var ctx = cap.getContext('2d');
     var track = streamRef.current && streamRef.current.getVideoTracks()[0];
+
     if (track && window.ImageCapture) {
-      var imageCapture = new ImageCapture(track);
+      var ic = new ImageCapture(track);
       frameIntervalRef.current = setInterval(async function() {
-        if (!sock || !sock.connected) return;
+        if (!sock.connected) return;
         try {
-          var bitmap = await imageCapture.grabFrame();
-          captureCtx.drawImage(bitmap, 0, 0, 320, 240);
-          var frame = captureCanvas.toDataURL('image/jpeg', 0.4);
-          sock.emit('video-frame', frame);
+          var bmp = await ic.grabFrame();
+          ctx.drawImage(bmp, 0, 0, 320, 240);
+          sock.volatile.emit('video-frame', cap.toDataURL('image/jpeg', 0.35));
         } catch(e) {}
-      }, 150);
+      }, 200);
     } else {
-      // Fallback: draw from selfVidRef directly
+      var v = selfVidRef.current;
       frameIntervalRef.current = setInterval(function() {
-        if (!sock || !sock.connected) return;
-        var v = selfVidRef.current;
+        if (!sock.connected) return;
+        if (!v) v = selfVidRef.current;
         if (!v || v.readyState < 2 || v.videoWidth === 0) return;
         try {
-          captureCtx.drawImage(v, 0, 0, 320, 240);
-          var frame = captureCanvas.toDataURL('image/jpeg', 0.4);
-          sock.emit('video-frame', frame);
+          ctx.drawImage(v, 0, 0, 320, 240);
+          sock.volatile.emit('video-frame', cap.toDataURL('image/jpeg', 0.35));
         } catch(e) {}
-      }, 150);
+      }, 200);
     }
   }
+
 
   function startSendingAudio(sock, vid) {
     if (!streamRef.current) return;

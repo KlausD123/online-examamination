@@ -75,6 +75,8 @@ io.on('connection', (socket) => {
       }
     }
     console.log('[VIVA]', role, name || '', 'joined', viva_id, '| students:', rooms[viva_id].students.length, '| admin:', !!rooms[viva_id].admin);
+    // Acknowledge join so client knows it's safe to start sending frames
+    socket.emit('joined-ack', { role, viva_id });
   });
 
   // WebRTC signaling (kept for potential use)
