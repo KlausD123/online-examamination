@@ -400,23 +400,34 @@ export default function VivaRoom() {
 
   function startSendingFrames(sock, vivaId) {
     clearInterval(frameIntervalRef.current);
-    // Use a hidden video fed directly from stream
-    var hiddenVid = document.createElement('video');
-    hiddenVid.muted = true; hiddenVid.autoplay = true; hiddenVid.playsInline = true;
-    hiddenVid.srcObject = streamRef.current;
-    hiddenVid.play().catch(function(){});
     var captureCanvas = document.createElement('canvas');
     captureCanvas.width = 320; captureCanvas.height = 240;
     var captureCtx = captureCanvas.getContext('2d');
-    frameIntervalRef.current = setInterval(function() {
-      if (!streamRef.current || !sock || !sock.connected) return;
-      if (hiddenVid.readyState < 2) { hiddenVid.play().catch(function(){}); return; }
-      try {
-        captureCtx.drawImage(hiddenVid, 0, 0, 320, 240);
-        var frame = captureCanvas.toDataURL('image/jpeg', 0.4);
-        sock.emit('video-frame', frame);
-      } catch(e) {}
-    }, 150);
+    var track = streamRef.current && streamRef.current.getVideoTracks()[0];
+    if (track && window.ImageCapture) {
+      var imageCapture = new ImageCapture(track);
+      frameIntervalRef.current = setInterval(async function() {
+        if (!sock || !sock.connected) return;
+        try {
+          var bitmap = await imageCapture.grabFrame();
+          captureCtx.drawImage(bitmap, 0, 0, 320, 240);
+          var frame = captureCanvas.toDataURL('image/jpeg', 0.4);
+          sock.emit('video-frame', frame);
+        } catch(e) {}
+      }, 150);
+    } else {
+      // Fallback: draw from videoRef (admin's own camera element in DOM)
+      frameIntervalRef.current = setInterval(function() {
+        if (!sock || !sock.connected) return;
+        var v = videoRef.current;
+        if (!v || v.readyState < 2 || v.videoWidth === 0) return;
+        try {
+          captureCtx.drawImage(v, 0, 0, 320, 240);
+          var frame = captureCanvas.toDataURL('image/jpeg', 0.4);
+          sock.emit('video-frame', frame);
+        } catch(e) {}
+      }, 150);
+    }
   }
 
   function startSendingAudio(sock, vivaId) {

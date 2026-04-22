@@ -222,7 +222,7 @@ export default function VivaJoin() {
   function enterRoom() {
     phaseRef.current = 'room'; setPhase('room');
     startMasterInterval();
-    // Attach video first, then start relay once video is playing
+    // Attach self video, then start relay
     var attempts = 0;
     var iv = setInterval(function() {
       attempts++;
@@ -231,13 +231,9 @@ export default function VivaJoin() {
       clearInterval(iv);
       selfVidRef.current.srcObject = streamRef.current;
       selfVidRef.current.muted = true;
-      selfVidRef.current.oncanplay = function() {
-        selfVidRef.current.play().catch(function(){});
-        setupStudentWebRTC();
-      };
       selfVidRef.current.play().catch(function(){});
-      // Fallback: start relay after 1s even if oncanplay doesn't fire
-      setTimeout(setupStudentWebRTC, 1000);
+      // Start relay after brief pause to ensure video is playing
+      setTimeout(setupStudentWebRTC, 800);
     }, 200);
   }
 
@@ -322,23 +318,36 @@ export default function VivaJoin() {
 
   function startSendingFrames(sock, vid) {
     clearInterval(frameIntervalRef.current);
-    // Use a hidden video element fed directly from stream — avoids readyState dependency on UI element
-    var hiddenVid = document.createElement('video');
-    hiddenVid.muted = true; hiddenVid.autoplay = true; hiddenVid.playsInline = true;
-    hiddenVid.srcObject = streamRef.current;
-    hiddenVid.play().catch(function(){});
     var captureCanvas = document.createElement('canvas');
     captureCanvas.width = 320; captureCanvas.height = 240;
     var captureCtx = captureCanvas.getContext('2d');
-    frameIntervalRef.current = setInterval(function() {
-      if (!streamRef.current || !sock || !sock.connected) return;
-      if (hiddenVid.readyState < 2) { hiddenVid.play().catch(function(){}); return; }
-      try {
-        captureCtx.drawImage(hiddenVid, 0, 0, 320, 240);
-        var frame = captureCanvas.toDataURL('image/jpeg', 0.4);
-        sock.emit('video-frame', frame);
-      } catch(e) {}
-    }, 150);
+    // Use the already-displayed selfVidRef — it's in DOM and playing
+    // Fall back to ImageCapture API if available
+    var track = streamRef.current && streamRef.current.getVideoTracks()[0];
+    if (track && window.ImageCapture) {
+      var imageCapture = new ImageCapture(track);
+      frameIntervalRef.current = setInterval(async function() {
+        if (!sock || !sock.connected) return;
+        try {
+          var bitmap = await imageCapture.grabFrame();
+          captureCtx.drawImage(bitmap, 0, 0, 320, 240);
+          var frame = captureCanvas.toDataURL('image/jpeg', 0.4);
+          sock.emit('video-frame', frame);
+        } catch(e) {}
+      }, 150);
+    } else {
+      // Fallback: draw from selfVidRef directly
+      frameIntervalRef.current = setInterval(function() {
+        if (!sock || !sock.connected) return;
+        var v = selfVidRef.current;
+        if (!v || v.readyState < 2 || v.videoWidth === 0) return;
+        try {
+          captureCtx.drawImage(v, 0, 0, 320, 240);
+          var frame = captureCanvas.toDataURL('image/jpeg', 0.4);
+          sock.emit('video-frame', frame);
+        } catch(e) {}
+      }, 150);
+    }
   }
 
   function startSendingAudio(sock, vid) {
