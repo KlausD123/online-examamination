@@ -166,6 +166,7 @@ export default function VivaRoom() {
   var [camReady,         setCamReady]         = useState(false);
   var [studentConnected, setStudentConnected] = useState(false);
   var [faceStatus,       setFaceStatus]       = useState('loading');
+  var [permBlocked,      setPermBlocked]      = useState(false); // camera/mic blocked by browser
   var videoRef      = useRef(null);
   var studentVidRef = useRef(null);
   var canvasRef     = useRef(null);
@@ -259,49 +260,57 @@ export default function VivaRoom() {
 
   // ── Camera + face detection ──────────────────────────────────────────────
   async function startCamera() {
-    try {
-      var stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
-        audio: true   // admin mic needed for student to hear questions
-      });
-      streamRef.current = stream;
+    // Try in order: video+audio → video-only → audio-only
+    var stream = null;
+    var constraints = [
+      { video: { width: { ideal: 640 }, height: { ideal: 480 } }, audio: true },
+      { video: { width: { ideal: 640 }, height: { ideal: 480 } }, audio: false },
+      { video: true, audio: true },
+      { video: true, audio: false },
+    ];
 
-      // Attach to video element — retry until element is mounted
-      var attempts = 0;
-      var iv = setInterval(function() {
-        attempts++;
-        if (attempts > 50) { clearInterval(iv); return; } // 10s timeout
-        if (!videoRef.current) return;
-        clearInterval(iv);
-        videoRef.current.srcObject = stream;
-        videoRef.current.muted = true; // mute own audio to avoid echo
-        // Use both onloadedmetadata AND a timeout fallback
-        var started = false;
-        function onReady() {
-          if (started) return;
-          started = true;
-          setCamReady(true);
-          setFaceStatus('ok');
-          startFaceDetection();
-          setTimeout(setupWebRTC, 500);
-        }
-        videoRef.current.onloadedmetadata = onReady;
-        videoRef.current.oncanplay = onReady;
-        // Fallback: if neither fires within 2s, proceed anyway
-        setTimeout(onReady, 2000);
-        videoRef.current.play().catch(function() {});
-      }, 200);
-    } catch(e) {
-      console.warn('Camera error:', e.name, e.message);
-      setFaceStatus('unavailable');
-      // Still try audio-only so admin can at least speak
+    for (var i = 0; i < constraints.length; i++) {
       try {
-        var audioOnly = await navigator.mediaDevices.getUserMedia({ audio: true });
-        streamRef.current = audioOnly;
-        setCamReady(true);
-        setTimeout(setupWebRTC, 500);
-      } catch(e2) {}
+        stream = await navigator.mediaDevices.getUserMedia(constraints[i]);
+        break;
+      } catch(e) {
+        console.warn('Camera attempt', i, 'failed:', e.name);
+      }
     }
+
+    if (!stream) {
+      setFaceStatus('unavailable');
+      // Show clear instruction overlay instead of just a toast
+      setPermBlocked(true);
+      setTimeout(setupWebRTC, 500);
+      return;
+    }
+
+    streamRef.current = stream;
+
+    // Attach to video element — retry until element is mounted
+    var attempts = 0;
+    var iv = setInterval(function() {
+      attempts++;
+      if (attempts > 50) { clearInterval(iv); return; }
+      if (!videoRef.current) return;
+      clearInterval(iv);
+      videoRef.current.srcObject = stream;
+      videoRef.current.muted = true;
+      var started = false;
+      function onReady() {
+        if (started) return;
+        started = true;
+        setCamReady(true);
+        setFaceStatus('loading');
+        startFaceDetection();
+        setTimeout(setupWebRTC, 500);
+      }
+      videoRef.current.onloadedmetadata = onReady;
+      videoRef.current.oncanplay = onReady;
+      setTimeout(onReady, 2000);
+      videoRef.current.play().catch(function() {});
+    }, 200);
   }
 
   // ── WebRTC via Socket.IO — admin side ───────────────────────
@@ -368,11 +377,18 @@ export default function VivaRoom() {
     streamRef.current.getTracks().forEach(function(t) { pc.addTrack(t, streamRef.current); });
 
     pc.ontrack = function(e) {
-      if (studentVidRef.current && e.streams && e.streams[0]) {
-        studentVidRef.current.srcObject = e.streams[0];
+      if (!e.streams || !e.streams[0]) return;
+      var remoteStream = e.streams[0];
+      setStudentConnected(true);
+      var att = 0;
+      var iv2 = setInterval(function() {
+        att++;
+        if (att > 30) { clearInterval(iv2); return; }
+        if (!studentVidRef.current) return;
+        clearInterval(iv2);
+        studentVidRef.current.srcObject = remoteStream;
         studentVidRef.current.play().catch(function(){});
-        setStudentConnected(true);
-      }
+      }, 200);
     };
 
     pc.onicecandidate = function(e) {
@@ -1010,6 +1026,21 @@ export default function VivaRoom() {
           <button className="btn btn-danger btn-sm" onClick={handleEndAndGrade} disabled={loading || transcript.length === 0}>⏹ End &amp; Grade</button>
         </div>
       </div>
+
+      {/* Camera permission blocked banner */}
+      {permBlocked && (
+        <div style={{ padding: '12px 16px', background: 'rgba(220,38,38,.12)', border: '1px solid rgba(220,38,38,.3)', borderRadius: 10, marginBottom: 10 }}>
+          <div style={{ fontWeight: 700, color: '#f87171', marginBottom: 6 }}>📷 Camera & Microphone Blocked</div>
+          <div style={{ fontSize: '0.82rem', color: '#fca5a5', lineHeight: 1.7 }}>
+            Your browser is blocking camera access.<br/>
+            <strong>Fix:</strong> Click the 🔒 lock icon in your address bar → set Camera & Microphone to <strong>Allow</strong> → then click Try Again below.
+          </div>
+          <button className="btn btn-sm" style={{ marginTop: 8, background: 'rgba(220,38,38,.2)', color: '#f87171', border: '1px solid rgba(220,38,38,.4)' }}
+            onClick={function() { setPermBlocked(false); startCamera(); }}>
+            🔄 Try Again
+          </button>
+        </div>
+      )}
 
       {/* Student being examined selector */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, padding: '7px 12px', background: 'rgba(255,255,255,.04)', borderRadius: 8, flexWrap: 'wrap' }}>

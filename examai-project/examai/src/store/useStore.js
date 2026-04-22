@@ -18,6 +18,7 @@ export function StoreProvider(props) {
   async function login(email, password) {
     var data = await apiPost('/auth/login', { email: email, password: password });
     localStorage.setItem('examai_token', data.token);
+    localStorage.setItem('examai_user_name', data.user.name || '');
     setCurrentUser(data.user);
     if (data.user.role === 'student') {
       try { var p = await apiGet('/profile'); setCurrentStudent(p); } catch(e) {}

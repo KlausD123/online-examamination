@@ -54,15 +54,33 @@ io.on('connection', (socket) => {
     socket.data.role    = role;
     socket.data.name    = name || role;
     if (!rooms[viva_id]) rooms[viva_id] = { admin: null, students: [] };
+
     if (role === 'admin') {
       rooms[viva_id].admin = socket.id;
+      // Tell all existing students that admin joined
       socket.to(viva_id).emit('admin-joined', { socketId: socket.id });
+      // Also tell admin about any students already in the room
+      const existing = rooms[viva_id].students;
+      if (existing.length > 0) {
+        existing.forEach(function(sid) {
+          const s = io.sockets.sockets.get(sid);
+          socket.emit('student-joined', { socketId: sid, name: s ? s.data.name : 'Student' });
+        });
+      }
     } else {
-      if (!rooms[viva_id].students.includes(socket.id)) rooms[viva_id].students.push(socket.id);
+      if (!rooms[viva_id].students.includes(socket.id))
+        rooms[viva_id].students.push(socket.id);
+      // Tell admin a new student joined
       const adminId = rooms[viva_id].admin;
-      if (adminId) io.to(adminId).emit('student-joined', { socketId: socket.id, name: socket.data.name });
+      if (adminId) {
+        io.to(adminId).emit('student-joined', { socketId: socket.id, name: socket.data.name });
+      }
+      // If admin already in room, ask admin to send an offer
+      if (adminId) {
+        socket.emit('admin-joined', { socketId: adminId });
+      }
     }
-    console.log('[VIVA]', role, name, 'joined', viva_id);
+    console.log('[VIVA]', role, name, 'joined', viva_id, '| students:', rooms[viva_id].students.length, '| admin:', !!rooms[viva_id].admin);
   });
 
   socket.on('offer', ({ viva_id, to, offer }) => {

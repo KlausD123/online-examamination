@@ -219,7 +219,9 @@ export default function VivaJoin() {
   function enterRoom() {
     phaseRef.current = 'room'; setPhase('room');
     startMasterInterval();
-    // Attach own video — retry until element mounted
+    // Start WebRTC immediately — don't wait for video element
+    setupStudentWebRTC();
+    // Attach own video separately — retry until element mounted
     var attempts = 0;
     var iv = setInterval(function() {
       attempts++;
@@ -229,7 +231,6 @@ export default function VivaJoin() {
       selfVidRef.current.srcObject = streamRef.current;
       selfVidRef.current.muted = true;
       selfVidRef.current.play().catch(function(){});
-      setupStudentWebRTC();
     }, 200);
   }
 
@@ -243,13 +244,15 @@ export default function VivaJoin() {
     socketRef.current = sock;
 
     sock.on('connect', function() {
-      sock.emit('join-room', { viva_id: vid, role: 'student', name: (window.__store && window.__store.currentUser && window.__store.currentUser.name) || 'Student' });
+      var studentName = localStorage.getItem('examai_user_name') || 'Student';
+      sock.emit('join-room', { viva_id: vid, role: 'student', name: studentName });
     });
 
-    // Admin tells us their socket ID — create offer toward them
+    // Admin is in the room — prepare our peer connection and wait for their offer
     sock.on('admin-joined', function(data) {
       adminSocketId.current = data.socketId;
-      startPeerConnection(data.socketId);
+      // Pre-create peer so we're ready to receive offer immediately
+      if (!peerRef.current) createPeer();
     });
 
     // Receive offer from admin
@@ -294,11 +297,19 @@ export default function VivaJoin() {
     peerRef.current = pc;
     if (streamRef.current) streamRef.current.getTracks().forEach(function(t){ pc.addTrack(t, streamRef.current); });
     pc.ontrack = function(e) {
-      if (adminVidRef.current && e.streams && e.streams[0]) {
-        adminVidRef.current.srcObject = e.streams[0];
+      if (!e.streams || !e.streams[0]) return;
+      var remoteStream = e.streams[0];
+      setAdminConnected(true);
+      // Retry attaching until video element is mounted
+      var att = 0;
+      var iv2 = setInterval(function() {
+        att++;
+        if (att > 30) { clearInterval(iv2); return; }
+        if (!adminVidRef.current) return;
+        clearInterval(iv2);
+        adminVidRef.current.srcObject = remoteStream;
         adminVidRef.current.play().catch(function(){});
-        setAdminConnected(true);
-      }
+      }, 200);
     };
     pc.onicecandidate = function(e) {
       if (e.candidate && sock) sock.emit('ice-candidate', { viva_id: vid, to: adminSocketId.current, candidate: e.candidate });
