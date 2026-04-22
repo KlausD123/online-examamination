@@ -28,6 +28,7 @@ export default function VivaJoin() {
   var [camOk,          setCamOk]          = useState(false);
   var [micOk,          setMicOk]          = useState(false);
   var [permErr,        setPermErr]        = useState('');
+  var [reGranting,     setReGranting]     = useState(false); // true while re-granting after nav-away
 
   // All refs — never stale inside intervals
   var previewRef      = useRef(null);
@@ -202,6 +203,7 @@ export default function VivaJoin() {
     try {
       var stream = await navigator.mediaDevices.getUserMedia({ video:true, audio:true });
       streamRef.current = stream; setCamOk(true); setMicOk(true);
+      setReGranting(false); // camera obtained — clear the re-grant flag
       var iv = setInterval(function(){ if (previewRef.current){ previewRef.current.srcObject = stream; clearInterval(iv); } }, 200);
     } catch(e) {
       setPermErr(e.name==='NotAllowedError' ? 'Permission denied. Allow camera & mic in your browser, then try again.' : 'Camera/Mic access denied.');
@@ -284,7 +286,7 @@ export default function VivaJoin() {
   // CAMERA LOST — navigated away during room/permission phase
   // Stream is gone (browser security), must re-grant permissions
   // ══════════════════════════════════════════════════════════
-  if ((phase === 'room' || phase === 'permission') && !streamRef.current) return (
+  if ((phase === 'room' || phase === 'permission') && !streamRef.current && !reGranting) return (
     <div style={{minHeight:'calc(100vh - 60px)',display:'flex',alignItems:'center',justifyContent:'center',background:'#0d0d14',padding:24}}>
       <div style={{textAlign:'center',background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.12)',borderRadius:20,padding:'44px 52px',maxWidth:480}}>
         <div style={{fontSize:'3.5rem',marginBottom:16}}>📷</div>
@@ -296,7 +298,11 @@ export default function VivaJoin() {
           Click below to re-grant camera &amp; mic access and rejoin.
         </div>
         <div style={{display:'flex',gap:12,justifyContent:'center',flexWrap:'wrap'}}>
-          <button className="btn btn-primary btn-lg" onClick={function(){ setCamOk(false); setMicOk(false); setPhaseRaw('permission'); }}>
+          <button className="btn btn-primary btn-lg" onClick={function(){
+            setReGranting(true);
+            setCamOk(false); setMicOk(false); setPermErr('');
+            setPhaseRaw('permission');
+          }}>
             🔓 Re-grant Camera &amp; Mic
           </button>
           <button className="btn btn-outline" onClick={function(){ leaveRoom(); }}>

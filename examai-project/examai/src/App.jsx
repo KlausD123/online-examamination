@@ -42,17 +42,32 @@ export default function App() {
   var store = useStore();
   var [page, setPage] = useState('dashboard');
   var [pageData, setPageData] = useState(null);
+  var [authChecking, setAuthChecking] = useState(!!localStorage.getItem('examai_token'));
 
   useEffect(function() {
     var token = localStorage.getItem('examai_token');
     if (token) {
       store.loadProfile().then(function(p) {
         if (p) store.setCurrentUser(p);
+        setAuthChecking(false);
+      }).catch(function() {
+        localStorage.removeItem('examai_token');
+        setAuthChecking(false);
       });
+    }
     }
   }, []); // eslint-disable-line
 
   function navigate(key, data) { setPage(key); setPageData(data || null); }
+
+  if (authChecking) return (
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg, #f8f8fc)' }}>
+      <div style={{ textAlign: 'center' }}>
+        <div className="spinner" style={{ width: 40, height: 40, margin: '0 auto 16px' }}/>
+        <div style={{ fontSize: '0.9rem', color: '#6b7280', fontFamily: 'JetBrains Mono, monospace' }}>Loading…</div>
+      </div>
+    </div>
+  );
 
   if (!store.currentUser) return React.createElement(AuthPage, null);
 
