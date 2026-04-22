@@ -2,6 +2,9 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useStore } from '../../store/useStore';
 import { groqChat } from '../../utils/aiService';
 import { apiPost, apiGet } from '../../utils/api';
+import { io as ioClient } from 'socket.io-client';
+
+var SOCKET_URL = 'http://localhost:5000';
 
 var API = 'http://localhost:5000/api';
 var SESSION_KEY = 'dexam_viva_session';
@@ -168,6 +171,7 @@ export default function VivaRoom() {
   var canvasRef     = useRef(null);
   var streamRef     = useRef(null);
   var peerRef       = useRef(null);
+  var socketRef     = useRef(null);     // Socket.IO
   var sigPollRef    = useRef(null);
   var faceIntRef    = useRef(null);
 
@@ -267,88 +271,92 @@ export default function VivaRoom() {
     } catch(e) { setFaceStatus('unavailable'); }
   }
 
-  async function setupWebRTC() {
+  // ── WebRTC via Socket.IO — admin side ───────────────────────
+  function setupWebRTC() {
     var vivaId = savedVivaRef.current ? savedVivaRef.current.viva_id : null;
-    if (!vivaId || !streamRef.current) return;
+    if (!vivaId) return;
 
+    var sock = ioClient(SOCKET_URL, { transports: ['websocket', 'polling'] });
+    socketRef.current = sock;
+
+    sock.on('connect', function() {
+      sock.emit('join-room', {
+        viva_id: vivaId,
+        role: 'admin',
+        name: 'Examiner'
+      });
+    });
+
+    // Student joined — create offer to them
+    sock.on('student-joined', function(data) {
+      setStudentConnected(false); // reset until connected
+      store.addToast('Student joined the room', 'success');
+      createOfferForStudent(data.socketId);
+    });
+
+    // Receive answer from student
+    sock.on('answer', async function(data) {
+      var pc = peerRef.current;
+      if (pc && pc.remoteDescription === null) {
+        try { await pc.setRemoteDescription(new RTCSessionDescription(data.answer)); } catch(e) { console.warn('setRemote failed', e); }
+      }
+    });
+
+    // Receive ICE candidate from student
+    sock.on('ice-candidate', async function(data) {
+      var pc = peerRef.current;
+      if (pc && data.candidate) {
+        try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch(e) {}
+      }
+    });
+
+    sock.on('student-left', function() {
+      setStudentConnected(false);
+      if (studentVidRef.current) studentVidRef.current.srcObject = null;
+    });
+  }
+
+  async function createOfferForStudent(studentSocketId) {
+    var vivaId = savedVivaRef.current ? savedVivaRef.current.viva_id : null;
+    var sock = socketRef.current;
+    if (!vivaId || !streamRef.current || !sock) return;
+
+    // Close old peer if any
     if (peerRef.current) { try { peerRef.current.close(); } catch(e) {} peerRef.current = null; }
 
+    var pc = new RTCPeerConnection({
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+      ]
+    });
+    peerRef.current = pc;
+
+    streamRef.current.getTracks().forEach(function(t) { pc.addTrack(t, streamRef.current); });
+
+    pc.ontrack = function(e) {
+      if (studentVidRef.current && e.streams && e.streams[0]) {
+        studentVidRef.current.srcObject = e.streams[0];
+        setStudentConnected(true);
+      }
+    };
+
+    pc.onicecandidate = function(e) {
+      if (e.candidate && sock) sock.emit('ice-candidate', { viva_id: vivaId, to: studentSocketId, candidate: e.candidate });
+    };
+
+    pc.onconnectionstatechange = function() {
+      if (pc.connectionState === 'connected') setStudentConnected(true);
+      if (pc.connectionState === 'failed') { try { pc.restartIce(); } catch(er) {} }
+    };
+
     try {
-      var pc = new RTCPeerConnection({
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:stun2.l.google.com:19302' },
-        ]
-      });
-      peerRef.current = pc;
-
-      streamRef.current.getTracks().forEach(function(t) { pc.addTrack(t, streamRef.current); });
-
-      pc.ontrack = function(e) {
-        if (studentVidRef.current && e.streams && e.streams[0]) {
-          studentVidRef.current.srcObject = e.streams[0];
-          setStudentConnected(true);
-        }
-      };
-
-      // Send our ICE candidates — store them first, then keep sending new ones
-      pc.onicecandidate = function(e) {
-        if (e.candidate) {
-          fetch(API + '/viva/' + vivaId + '/signal/candidate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() },
-            body: JSON.stringify({ role: 'admin', candidate: e.candidate })
-          }).catch(function() {});
-        }
-      };
-
-      pc.onconnectionstatechange = function() {
-        if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-          try { pc.restartIce(); } catch(e) {}
-        }
-      };
-
-      // Create and store offer
       var offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      await fetch(API + '/viva/' + vivaId + '/signal/offer', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() },
-        body: JSON.stringify({ offer: pc.localDescription })
-      });
-
-      // Poll for student answer
-      clearInterval(sigPollRef.current);
-      sigPollRef.current = setInterval(async function() {
-        if (!peerRef.current) { clearInterval(sigPollRef.current); return; }
-        try {
-          var r = await fetch(API + '/viva/' + vivaId + '/signal/answer', { headers: { Authorization: 'Bearer ' + getToken() } });
-          var data = await r.json();
-          if (data.answer && pc.remoteDescription === null) {
-            clearInterval(sigPollRef.current);
-            await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-
-            // Fetch student ICE candidates
-            var cr = await fetch(API + '/viva/' + vivaId + '/signal/candidates/student', { headers: { Authorization: 'Bearer ' + getToken() } });
-            var cd = await cr.json();
-            for (var c of (cd.candidates || [])) { try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch(e) {} }
-
-            // Keep polling for late student candidates for 30s
-            var latePoll = setInterval(async function() {
-              if (!peerRef.current) { clearInterval(latePoll); return; }
-              try {
-                var lr = await fetch(API + '/viva/' + vivaId + '/signal/candidates/student', { headers: { Authorization: 'Bearer ' + getToken() } });
-                var ld = await lr.json();
-                for (var lc of (ld.candidates || [])) { try { await pc.addIceCandidate(new RTCIceCandidate(lc)); } catch(e) {} }
-              } catch(e) {}
-            }, 3000);
-            setTimeout(function() { clearInterval(latePoll); }, 30000);
-          }
-        } catch(e) {}
-      }, 2000);
-    } catch(e) { console.warn('WebRTC failed:', e); }
+      sock.emit('offer', { viva_id: vivaId, to: studentSocketId, offer: pc.localDescription });
+    } catch(e) { console.warn('createOffer failed', e); }
   }
+
 
   async function startFaceDetection() {
     try {
@@ -385,6 +393,12 @@ export default function VivaRoom() {
     clearTimeout(graceRef.current); clearTimeout(silenceTimer.current);
     stopSTT(); synthRef.current && synthRef.current.cancel();
     if (peerRef.current) { try { peerRef.current.close(); } catch(e) {} peerRef.current = null; }
+    if (socketRef.current) {
+      var vivaId = savedVivaRef.current ? savedVivaRef.current.viva_id : null;
+      if (vivaId) socketRef.current.emit('end-session', { viva_id: vivaId });
+      try { socketRef.current.disconnect(); } catch(e) {}
+      socketRef.current = null;
+    }
     if (streamRef.current) { streamRef.current.getTracks().forEach(function(t) { t.stop(); }); streamRef.current = null; }
   }
 

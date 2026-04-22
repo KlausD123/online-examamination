@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useStore } from '../../store/useStore';
 import { apiGet, apiPost } from '../../utils/api';
+import { io as ioClient } from 'socket.io-client';
+
+var SOCKET_URL = 'http://localhost:5000';
 
 var AWAY_LIMIT_SEC = 600; // 10 minutes
 
@@ -36,6 +39,8 @@ export default function VivaJoin() {
   var adminVidRef     = useRef(null);
   var streamRef       = useRef(null);
   var peerRef         = useRef(null);
+  var socketRef       = useRef(null);   // Socket.IO connection
+  var adminSocketId   = useRef(null);   // admin's socket ID for routing
   var masterRef       = useRef(null);     // single 1s interval
   var awayStartRef    = useRef(null);     // timestamp of when student left
   var roomIdRef       = useRef('');
@@ -181,6 +186,7 @@ export default function VivaJoin() {
 
   function stopMedia() {
     if (peerRef.current) { try { peerRef.current.close(); } catch(e){} peerRef.current = null; }
+    if (socketRef.current) { try { socketRef.current.disconnect(); } catch(e){} socketRef.current = null; }
     if (streamRef.current) { streamRef.current.getTracks().forEach(function(t){t.stop();}); streamRef.current = null; }
   }
 
@@ -219,91 +225,94 @@ export default function VivaJoin() {
     startMasterInterval();
   }
 
-  // ── WebRTC student side ───────────────────────────────────
-  async function setupStudentWebRTC() {
+  // ── WebRTC via Socket.IO signaling ──────────────────────────
+  function setupStudentWebRTC() {
     var vid = roomIdRef.current;
     if (!vid || !streamRef.current) return;
-    var token   = localStorage.getItem('examai_token');
-    var headers = { 'Content-Type':'application/json', Authorization:'Bearer '+token };
 
-    if (peerRef.current) { try { peerRef.current.close(); } catch(e){} peerRef.current = null; }
+    // Connect socket
+    var sock = ioClient(SOCKET_URL, { transports: ['websocket', 'polling'] });
+    socketRef.current = sock;
 
-    try {
-      var pc = new RTCPeerConnection({
-        iceServers: [
-          { urls:'stun:stun.l.google.com:19302' },
-          { urls:'stun:stun1.l.google.com:19302' },
-          { urls:'stun:stun2.l.google.com:19302' },
-        ]
-      });
-      peerRef.current = pc;
+    sock.on('connect', function() {
+      sock.emit('join-room', { viva_id: vid, role: 'student', name: (window.__store && window.__store.currentUser && window.__store.currentUser.name) || 'Student' });
+    });
 
-      var pendingCandidates = [];
+    // Admin tells us their socket ID — create offer toward them
+    sock.on('admin-joined', function(data) {
+      adminSocketId.current = data.socketId;
+      startPeerConnection(data.socketId);
+    });
 
-      streamRef.current.getTracks().forEach(function(t){ pc.addTrack(t, streamRef.current); });
+    // Receive offer from admin
+    sock.on('offer', async function(data) {
+      adminSocketId.current = data.from;
+      if (!peerRef.current) createPeer();
+      var pc = peerRef.current;
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+        var answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        sock.emit('answer', { viva_id: vid, to: data.from, answer: pc.localDescription });
+      } catch(e) { console.warn('answer failed', e); }
+    });
 
-      pc.ontrack = function(e) {
-        if (adminVidRef.current && e.streams && e.streams[0]) {
-          adminVidRef.current.srcObject = e.streams[0];
-          setAdminConnected(true);
-        }
-      };
+    // Receive ICE candidate from admin
+    sock.on('ice-candidate', async function(data) {
+      var pc = peerRef.current;
+      if (pc && data.candidate) {
+        try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch(e) {}
+      }
+    });
 
-      pc.onicecandidate = function(e) {
-        if (e.candidate) fetch('http://localhost:5000/api/viva/'+vid+'/signal/candidate', {
-          method:'POST', headers, body:JSON.stringify({ role:'student', candidate:e.candidate })
-        }).catch(function(){});
-      };
-
-      pc.onconnectionstatechange = function() {
-        if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-          try { pc.restartIce(); } catch(e2) {}
-        }
-      };
-
-      // Poll for admin offer — up to 5 minutes (150 tries x 2s)
-      var tries = 0;
-      var poll = setInterval(async function() {
-        tries++;
-        if (tries > 150 || !peerRef.current) { clearInterval(poll); return; }
-        try {
-          var r = await fetch('http://localhost:5000/api/viva/'+vid+'/signal/offer', { headers:{Authorization:'Bearer '+token} });
-          var data = await r.json();
-          if (data.offer && pc.remoteDescription === null) {
-            clearInterval(poll);
-            await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-
-            var answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            await fetch('http://localhost:5000/api/viva/'+vid+'/signal/answer', {
-              method:'POST', headers, body:JSON.stringify({ answer:pc.localDescription })
-            });
-
-            // Drain buffered then fetch admin candidates
-            for (var bc of pendingCandidates) { try { await pc.addIceCandidate(new RTCIceCandidate(bc)); } catch(e){} }
-            pendingCandidates = [];
-
-            var cr = await fetch('http://localhost:5000/api/viva/'+vid+'/signal/candidates/admin', { headers:{Authorization:'Bearer '+token} });
-            var cd = await cr.json();
-            for (var c of (cd.candidates||[])) { try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch(e){} }
-
-            // Keep polling for late admin candidates for 30s
-            var latePoll = setInterval(async function() {
-              if (!peerRef.current) { clearInterval(latePoll); return; }
-              try {
-                var lr = await fetch('http://localhost:5000/api/viva/'+vid+'/signal/candidates/admin', { headers:{Authorization:'Bearer '+token} });
-                var ld = await lr.json();
-                for (var lc of (ld.candidates||[])) { try { await pc.addIceCandidate(new RTCIceCandidate(lc)); } catch(e){} }
-              } catch(e) {}
-            }, 3000);
-            setTimeout(function() { clearInterval(latePoll); }, 30000);
-          }
-        } catch(e2){}
-      }, 2000);
-    } catch(e) { console.warn('Student WebRTC failed:', e); }
+    sock.on('session-ended', function() {
+      phaseRef.current = 'ended'; setPhase('ended');
+    });
+    sock.on('admin-left', function() {
+      setAdminConnected(false);
+    });
   }
 
-  function toggleCam() {
+  function createPeer() {
+    if (peerRef.current) { try { peerRef.current.close(); } catch(e) {} }
+    var vid = roomIdRef.current;
+    var sock = socketRef.current;
+    var pc = new RTCPeerConnection({
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+      ]
+    });
+    peerRef.current = pc;
+    if (streamRef.current) streamRef.current.getTracks().forEach(function(t){ pc.addTrack(t, streamRef.current); });
+    pc.ontrack = function(e) {
+      if (adminVidRef.current && e.streams && e.streams[0]) {
+        adminVidRef.current.srcObject = e.streams[0];
+        setAdminConnected(true);
+      }
+    };
+    pc.onicecandidate = function(e) {
+      if (e.candidate && sock) sock.emit('ice-candidate', { viva_id: vid, to: adminSocketId.current, candidate: e.candidate });
+    };
+    pc.onconnectionstatechange = function() {
+      if (pc.connectionState === 'connected') setAdminConnected(true);
+      if (pc.connectionState === 'failed') { try { pc.restartIce(); } catch(er){} }
+    };
+    return pc;
+  }
+
+  async function startPeerConnection(adminId) {
+    var vid = roomIdRef.current;
+    var sock = socketRef.current;
+    var pc = createPeer();
+    try {
+      var offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      sock.emit('offer', { viva_id: vid, to: adminId, offer: pc.localDescription });
+    } catch(e) { console.warn('offer failed', e); }
+  }
+
+    function toggleCam() {
     if (streamRef.current) { streamRef.current.getVideoTracks().forEach(function(t){t.enabled=!camOn;}); setCamOn(function(v){return !v;}); }
   }
   function toggleMic() {
