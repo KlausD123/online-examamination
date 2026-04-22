@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS users (
   user_id    INT AUTO_INCREMENT PRIMARY KEY,
   name       VARCHAR(255) NOT NULL,
   email      VARCHAR(255) UNIQUE NOT NULL,
-  password   VARCHAR(255) NOT NULL,        -- bcrypt OR plain text (auto-upgraded on login)
+  password   VARCHAR(255) NOT NULL,
   role       ENUM('admin','student') DEFAULT 'student',
   avatar_url TEXT NULL,
   bio        TEXT NULL,
@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS questions (
   difficulty     ENUM('Easy','Medium','Hard') DEFAULT 'Medium',
   marks          INT DEFAULT 10,
   correct_answer VARCHAR(255) DEFAULT '',
-  explanation    TEXT DEFAULT '',
+  explanation    TEXT,
   question_order INT DEFAULT 0,
   FOREIGN KEY (exam_id) REFERENCES exams(exam_id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS notifications (
   message         TEXT NOT NULL,
   type            ENUM('info','warning','urgent','success') DEFAULT 'info',
   admin_id        INT NULL,
-  recipient_id    INT NULL,        -- NULL = global, set = targeted to specific student
+  recipient_id    INT NULL,
   viva_room_id    VARCHAR(36) NULL,
   expires_at      DATETIME NULL,
   created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -123,6 +123,8 @@ CREATE TABLE IF NOT EXISTS viva_results (
   grade           VARCHAR(3) DEFAULT 'F',
   full_transcript TEXT NULL,
   ai_report       JSON NULL,
+  correct_count   INT DEFAULT 0,
+  total_questions INT DEFAULT 0,
   created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (viva_id) REFERENCES viva_sessions(viva_id)
 ) ENGINE=InnoDB;
@@ -132,9 +134,3 @@ SET FOREIGN_KEY_CHECKS = 1;
 -- Default admin (password = Admin@123)
 INSERT IGNORE INTO users (name, email, password, role)
 VALUES ('Admin', 'admin@dexam.com', '$2b$10$8K1p/a0dL1LXMIgoEDFrwOfMQsZzTTWnekvHjbH9kA1.I7k7N7hG6', 'admin');
-
--- Add ended tracking to viva_sessions (run once if upgrading existing DB)
-ALTER TABLE viva_sessions ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'active';
-ALTER TABLE viva_sessions ADD COLUMN IF NOT EXISTS ended_at DATETIME NULL;
-ALTER TABLE viva_results ADD COLUMN IF NOT EXISTS correct_count INT DEFAULT 0;
-ALTER TABLE viva_results ADD COLUMN IF NOT EXISTS total_questions INT DEFAULT 0;
