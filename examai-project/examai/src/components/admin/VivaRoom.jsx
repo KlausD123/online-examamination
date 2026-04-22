@@ -385,10 +385,14 @@ export default function VivaRoom() {
 
     sock.on('session-ended', function() { store.addToast('Session ended by student', 'info'); });
 
-    // Start sending admin video + audio after stream is ready
+    // Start sending frames as soon as stream is available
+    var waitAttempts = 0;
     var waitStream = setInterval(function() {
+      waitAttempts++;
+      if (waitAttempts > 40) { clearInterval(waitStream); return; } // 20s timeout
       if (!streamRef.current) return;
       clearInterval(waitStream);
+      console.log('[Admin] Stream ready, starting frame relay');
       startSendingFrames(sock, vivaId);
       startSendingAudio(sock, vivaId);
     }, 500);
@@ -396,20 +400,23 @@ export default function VivaRoom() {
 
   function startSendingFrames(sock, vivaId) {
     clearInterval(frameIntervalRef.current);
+    // Use a hidden video fed directly from stream
+    var hiddenVid = document.createElement('video');
+    hiddenVid.muted = true; hiddenVid.autoplay = true; hiddenVid.playsInline = true;
+    hiddenVid.srcObject = streamRef.current;
+    hiddenVid.play().catch(function(){});
     var captureCanvas = document.createElement('canvas');
+    captureCanvas.width = 320; captureCanvas.height = 240;
     var captureCtx = captureCanvas.getContext('2d');
     frameIntervalRef.current = setInterval(function() {
       if (!streamRef.current || !sock || !sock.connected) return;
-      var videoEl = videoRef.current;
-      if (!videoEl || videoEl.readyState < 2) return;
+      if (hiddenVid.readyState < 2) { hiddenVid.play().catch(function(){}); return; }
       try {
-        captureCanvas.width  = 320;
-        captureCanvas.height = 240;
-        captureCtx.drawImage(videoEl, 0, 0, 320, 240);
-        var frame = captureCanvas.toDataURL('image/jpeg', 0.5);
+        captureCtx.drawImage(hiddenVid, 0, 0, 320, 240);
+        var frame = captureCanvas.toDataURL('image/jpeg', 0.4);
         sock.emit('video-frame', frame);
       } catch(e) {}
-    }, 100);
+    }, 150);
   }
 
   function startSendingAudio(sock, vivaId) {

@@ -222,25 +222,29 @@ export default function VivaJoin() {
   function enterRoom() {
     phaseRef.current = 'room'; setPhase('room');
     startMasterInterval();
-    // Start WebRTC immediately — don't wait for video element
-    setupStudentWebRTC();
-    // Attach own video separately — retry until element mounted
+    // Attach video first, then start relay once video is playing
     var attempts = 0;
     var iv = setInterval(function() {
       attempts++;
-      if (attempts > 30) { clearInterval(iv); return; }
+      if (attempts > 50) { clearInterval(iv); setupStudentWebRTC(); return; }
       if (!selfVidRef.current || !streamRef.current) return;
       clearInterval(iv);
       selfVidRef.current.srcObject = streamRef.current;
       selfVidRef.current.muted = true;
+      selfVidRef.current.oncanplay = function() {
+        selfVidRef.current.play().catch(function(){});
+        setupStudentWebRTC();
+      };
       selfVidRef.current.play().catch(function(){});
+      // Fallback: start relay after 1s even if oncanplay doesn't fire
+      setTimeout(setupStudentWebRTC, 1000);
     }, 200);
   }
 
   // ── Video relay via Socket.IO (no WebRTC peer connection needed) ──────────
   function setupStudentWebRTC() {
     var vid = roomIdRef.current;
-    if (!vid || !streamRef.current) { console.warn('[Student] No vid or stream'); return; }
+    if (!vid) { console.warn('[Student] No room ID'); return; }
 
     // Disconnect existing socket
     if (socketRef.current) { try { socketRef.current.disconnect(); } catch(e) {} socketRef.current = null; }
@@ -300,9 +304,17 @@ export default function VivaJoin() {
     sock.on('disconnect', function() { console.log('[Student] Socket disconnected'); });
 
     // Start sending our video frames to admin
-    startSendingFrames(sock, vid);
-    // Start sending our audio to admin
-    startSendingAudio(sock, vid);
+    // Start sending frames — wait for stream if not ready yet
+    var waitAttempts = 0;
+    var waitStream = setInterval(function() {
+      waitAttempts++;
+      if (waitAttempts > 40) { clearInterval(waitStream); return; }
+      if (!streamRef.current) return;
+      clearInterval(waitStream);
+      console.log('[Student] Stream ready, starting frame relay');
+      startSendingFrames(sock, vid);
+      startSendingAudio(sock, vid);
+    }, 500);
   }
 
   var frameIntervalRef = useRef(null);
@@ -310,20 +322,23 @@ export default function VivaJoin() {
 
   function startSendingFrames(sock, vid) {
     clearInterval(frameIntervalRef.current);
+    // Use a hidden video element fed directly from stream — avoids readyState dependency on UI element
+    var hiddenVid = document.createElement('video');
+    hiddenVid.muted = true; hiddenVid.autoplay = true; hiddenVid.playsInline = true;
+    hiddenVid.srcObject = streamRef.current;
+    hiddenVid.play().catch(function(){});
     var captureCanvas = document.createElement('canvas');
+    captureCanvas.width = 320; captureCanvas.height = 240;
     var captureCtx = captureCanvas.getContext('2d');
     frameIntervalRef.current = setInterval(function() {
       if (!streamRef.current || !sock || !sock.connected) return;
-      var videoEl = selfVidRef.current;
-      if (!videoEl || videoEl.readyState < 2) return;
+      if (hiddenVid.readyState < 2) { hiddenVid.play().catch(function(){}); return; }
       try {
-        captureCanvas.width  = 320;
-        captureCanvas.height = 240;
-        captureCtx.drawImage(videoEl, 0, 0, 320, 240);
-        var frame = captureCanvas.toDataURL('image/jpeg', 0.5);
+        captureCtx.drawImage(hiddenVid, 0, 0, 320, 240);
+        var frame = captureCanvas.toDataURL('image/jpeg', 0.4);
         sock.emit('video-frame', frame);
       } catch(e) {}
-    }, 100); // 10fps
+    }, 150);
   }
 
   function startSendingAudio(sock, vid) {
