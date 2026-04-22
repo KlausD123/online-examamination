@@ -41,6 +41,8 @@ export default function VivaJoin() {
   var peerRef         = useRef(null);
   var socketRef       = useRef(null);   // Socket.IO connection
   var adminSocketId   = useRef(null);   // admin's socket ID for routing
+  var pendingIceCandidates = useRef([]); // buffer ICE candidates before remote desc
+  var remoteDescSet   = useRef(false);   // has remote description been set
   var masterRef       = useRef(null);     // single 1s interval
   var awayStartRef    = useRef(null);     // timestamp of when student left
   var roomIdRef       = useRef('');
@@ -185,6 +187,7 @@ export default function VivaJoin() {
   }
 
   function stopMedia() {
+    stopFrameRelay();
     if (peerRef.current) { try { peerRef.current.close(); } catch(e){} peerRef.current = null; }
     if (socketRef.current) { try { socketRef.current.disconnect(); } catch(e){} socketRef.current = null; }
     if (streamRef.current) { streamRef.current.getTracks().forEach(function(t){t.stop();}); streamRef.current = null; }
@@ -234,133 +237,125 @@ export default function VivaJoin() {
     }, 200);
   }
 
-  // ── WebRTC via Socket.IO signaling ──────────────────────────
+  // ── Video relay via Socket.IO (no WebRTC peer connection needed) ──────────
   function setupStudentWebRTC() {
     var vid = roomIdRef.current;
-    if (!vid || !streamRef.current) return;
+    if (!vid || !streamRef.current) { console.warn('[Student] No vid or stream'); return; }
 
-    // Connect socket
+    // Disconnect existing socket
+    if (socketRef.current) { try { socketRef.current.disconnect(); } catch(e) {} socketRef.current = null; }
+
     var sock = ioClient(SOCKET_URL, { transports: ['websocket', 'polling'] });
     socketRef.current = sock;
 
     sock.on('connect', function() {
-      var studentName = localStorage.getItem('examai_user_name') || 'Student';
-      sock.emit('join-room', { viva_id: vid, role: 'student', name: studentName });
+      console.log('[Student] Socket connected:', sock.id);
+      var name = localStorage.getItem('examai_user_name') || 'Student';
+      sock.emit('join-room', { viva_id: vid, role: 'student', name: name });
     });
 
-    // Admin is in the room — prepare our peer connection and wait for their offer
-    sock.on('admin-joined', function(data) {
-      adminSocketId.current = data.socketId;
-      // Pre-create peer so we're ready to receive offer immediately
-      if (!peerRef.current) createPeer();
-    });
-
-    var pendingCandidates = [];
-    var remoteSet = false;
-
-    // Receive offer from admin — set remote, send answer, drain buffered candidates
-    sock.on('offer', async function(data) {
-      adminSocketId.current = data.from;
-      if (!peerRef.current) createPeer();
-      var pc = peerRef.current;
-      try {
-        await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-        remoteSet = true;
-        // Drain any ICE candidates that arrived before the offer
-        for (var c of pendingCandidates) { try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch(ex) {} }
-        pendingCandidates = [];
-        var answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        console.log('[Student] Answer sent to admin', data.from);
-        sock.emit('answer', { viva_id: vid, to: data.from, answer: pc.localDescription });
-      } catch(e) { console.warn('[Student] answer failed:', e); }
-    });
-
-    // Receive ICE candidate from admin — buffer if offer not yet received
-    sock.on('ice-candidate', async function(data) {
-      if (!data.candidate) return;
-      if (!remoteSet) { pendingCandidates.push(data.candidate); return; }
-      var pc = peerRef.current;
-      if (pc) { try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch(e) {} }
-    });
-
-    sock.on('session-ended', function() {
-      phaseRef.current = 'ended'; setPhase('ended');
-    });
-    sock.on('admin-left', function() {
-      setAdminConnected(false);
-    });
-  }
-
-  function createPeer() {
-    if (peerRef.current) { try { peerRef.current.close(); } catch(e) {} }
-    var vid = roomIdRef.current;
-    var sock = socketRef.current;
-
-    // No STUN for localhost
-    var pc = new RTCPeerConnection({
-      iceServers: [],
-      iceTransportPolicy: 'all',
-    });
-    peerRef.current = pc;
-
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(function(t) {
-        console.log('[Student] Adding track:', t.kind);
-        pc.addTrack(t, streamRef.current);
-      });
-    }
-
-    pc.ontrack = function(e) {
-      console.log('[Student] Got remote track:', e.track.kind);
-      if (!e.streams || !e.streams[0]) return;
-      var remoteStream = e.streams[0];
-      setAdminConnected(true);
-      var att = 0;
-      var iv2 = setInterval(function() {
-        att++;
-        if (att > 50) { clearInterval(iv2); return; }
-        if (!adminVidRef.current) return;
-        clearInterval(iv2);
-        adminVidRef.current.srcObject = remoteStream;
-        adminVidRef.current.play().catch(function(e){ console.warn('play err', e); });
-        console.log('[Student] Admin video attached');
-      }, 100);
-    };
-
-    pc.onicecandidate = function(e) {
-      if (e.candidate && sock) {
-        console.log('[Student] Sending ICE candidate to admin');
-        sock.emit('ice-candidate', { viva_id: vid, to: adminSocketId.current, candidate: e.candidate });
-      } else if (!e.candidate) {
-        console.log('[Student] ICE gathering complete');
+    // Admin joined — we know they're there, mark connected
+    sock.on('peer-joined', function(data) {
+      if (data.role === 'admin') {
+        console.log('[Student] Admin is in the room');
+        setAdminConnected(true);
       }
-    };
+    });
 
-    pc.oniceconnectionstatechange = function() {
-      console.log('[Student] ICE state:', pc.iceConnectionState);
-      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') setAdminConnected(true);
-      if (pc.iceConnectionState === 'failed') { try { pc.restartIce(); } catch(er){} }
-    };
+    // Receive video frame from admin — draw on canvas
+    sock.on('remote-frame', function(data) {
+      if (data.role !== 'admin') return;
+      if (!adminVidRef.current) return;
+      var img = new Image();
+      img.onload = function() {
+        var canvas = adminVidRef.current;
+        if (!canvas) return;
+        var ctx = canvas.getContext('2d');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        ctx.drawImage(img, 0, 0);
+      };
+      img.src = data.frame;
+    });
 
-    pc.onconnectionstatechange = function() {
-      console.log('[Student] Connection state:', pc.connectionState);
-      if (pc.connectionState === 'connected') setAdminConnected(true);
-    };
+    // Admin audio via Web Audio
+    var audioCtx = null;
+    sock.on('remote-audio', function(data) {
+      if (data.role !== 'admin') return;
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        var buf = audioCtx.createBuffer(1, data.chunk.length, 44100);
+        buf.getChannelData(0).set(new Float32Array(data.chunk));
+        var src = audioCtx.createBufferSource();
+        src.buffer = buf;
+        src.connect(audioCtx.destination);
+        src.start();
+      } catch(e) {}
+    });
 
-    return pc;
+    sock.on('peer-left', function(data) {
+      if (data.role === 'admin') setAdminConnected(false);
+    });
+    sock.on('session-ended', function() { phaseRef.current = 'ended'; setPhase('ended'); });
+    sock.on('disconnect', function() { console.log('[Student] Socket disconnected'); });
+
+    // Start sending our video frames to admin
+    startSendingFrames(sock, vid);
+    // Start sending our audio to admin
+    startSendingAudio(sock, vid);
   }
-  async function startPeerConnection(adminId) {
-    var vid = roomIdRef.current;
-    var sock = socketRef.current;
-    var pc = createPeer();
+
+  var frameIntervalRef = useRef(null);
+  var audioProcessorRef = useRef(null);
+
+  function startSendingFrames(sock, vid) {
+    clearInterval(frameIntervalRef.current);
+    var captureCanvas = document.createElement('canvas');
+    var captureCtx = captureCanvas.getContext('2d');
+    frameIntervalRef.current = setInterval(function() {
+      if (!streamRef.current || !sock || !sock.connected) return;
+      var videoEl = selfVidRef.current;
+      if (!videoEl || videoEl.readyState < 2) return;
+      try {
+        captureCanvas.width  = 320;
+        captureCanvas.height = 240;
+        captureCtx.drawImage(videoEl, 0, 0, 320, 240);
+        var frame = captureCanvas.toDataURL('image/jpeg', 0.5);
+        sock.emit('video-frame', frame);
+      } catch(e) {}
+    }, 100); // 10fps
+  }
+
+  function startSendingAudio(sock, vid) {
+    if (!streamRef.current) return;
     try {
-      var offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      sock.emit('offer', { viva_id: vid, to: adminId, offer: pc.localDescription });
-    } catch(e) { console.warn('offer failed', e); }
+      var audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      var src = audioCtx.createMediaStreamSource(streamRef.current);
+      var proc = audioCtx.createScriptProcessor(2048, 1, 1);
+      proc.onaudioprocess = function(e) {
+        if (!sock || !sock.connected) return;
+        var data = e.inputBuffer.getChannelData(0);
+        sock.emit('audio-chunk', Array.from(data));
+      };
+      src.connect(proc);
+      proc.connect(audioCtx.destination);
+      audioProcessorRef.current = { audioCtx, proc, src };
+    } catch(e) { console.warn('[Student] Audio relay failed:', e); }
   }
 
+  function stopFrameRelay() {
+    clearInterval(frameIntervalRef.current);
+    if (audioProcessorRef.current) {
+      try {
+        audioProcessorRef.current.proc.disconnect();
+        audioProcessorRef.current.src.disconnect();
+        audioProcessorRef.current.audioCtx.close();
+      } catch(e) {}
+      audioProcessorRef.current = null;
+    }
+  }
+
+  
     function toggleCam() {
     if (streamRef.current) { streamRef.current.getVideoTracks().forEach(function(t){t.enabled=!camOn;}); setCamOn(function(v){return !v;}); }
   }
@@ -584,12 +579,7 @@ export default function VivaJoin() {
         {/* Examiner's live video via WebRTC */}
         <div className="card" style={{padding:12}}>
           <div style={{position:'relative',borderRadius:8,overflow:'hidden',background:'#111',lineHeight:0}}>
-            <video ref={adminVidRef} autoPlay playsInline style={{width:'100%',height:220,objectFit:'cover',display:'block'}}
-              ref={function(el) {
-                adminVidRef.current = el;
-                if (el) { el.autoplay = true; el.playsInline = true; }
-              }}
-            />
+            <canvas ref={adminVidRef} style={{width:'100%',height:220,objectFit:'cover',display:'block',background:'#111'}}/>
             {!adminConnected && (
               <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:8}}>
                 <div style={{fontSize:'2.8rem',opacity:.25}}>👨‍🏫</div>

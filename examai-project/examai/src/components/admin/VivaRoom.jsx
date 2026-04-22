@@ -313,162 +313,139 @@ export default function VivaRoom() {
     }, 200);
   }
 
-  // ── WebRTC via Socket.IO — admin side ───────────────────────
+  // ── Video relay via Socket.IO ─────────────────────────────────────────────
+  var frameIntervalRef = useRef(null);
+  var audioProcessorRef = useRef(null);
+  var studentCanvasRef = useRef({});  // map of socketId → canvas element
+
   function setupWebRTC() {
     var vivaId = savedVivaRef.current ? savedVivaRef.current.viva_id : null;
     if (!vivaId) return;
+
+    // Disconnect existing
+    if (socketRef.current) { try { socketRef.current.disconnect(); } catch(e) {} socketRef.current = null; }
 
     var sock = ioClient(SOCKET_URL, { transports: ['websocket', 'polling'] });
     socketRef.current = sock;
 
     sock.on('connect', function() {
-      sock.emit('join-room', {
-        viva_id: vivaId,
-        role: 'admin',
-        name: 'Examiner'
-      });
+      console.log('[Admin] Socket connected:', sock.id);
+      sock.emit('join-room', { viva_id: vivaId, role: 'admin', name: 'Examiner' });
     });
 
-    // Student joined — create offer to them
-    sock.on('student-joined', function(data) {
-      setStudentConnected(false); // reset until connected
-      store.addToast('Student joined the room', 'success');
-      createOfferForStudent(data.socketId);
-    });
-
-    // Receive answer from student
-    sock.on('answer', async function(data) {
-      var pc = peerRef.current;
-      if (pc && pc.remoteDescription === null) {
-        try { await pc.setRemoteDescription(new RTCSessionDescription(data.answer)); } catch(e) { console.warn('setRemote failed', e); }
-      }
-    });
-
-    // Receive ICE candidate from student
-    sock.on('ice-candidate', async function(data) {
-      var pc = peerRef.current;
-      if (pc && data.candidate) {
-        try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch(e) {}
-      }
-    });
-
-    sock.on('student-left', function() {
-      setStudentConnected(false);
-      if (studentVidRef.current) studentVidRef.current.srcObject = null;
-    });
-  }
-
-  async function createOfferForStudent(studentSocketId) {
-    var vivaId = savedVivaRef.current ? savedVivaRef.current.viva_id : null;
-    var sock = socketRef.current;
-    if (!vivaId || !sock) { console.warn('[Admin] No vivaId or socket'); return; }
-
-    console.log('[Admin] Creating offer for student', studentSocketId);
-
-    // Close old peer
-    if (peerRef.current) { try { peerRef.current.close(); } catch(e) {} peerRef.current = null; }
-
-    var pendingCandidates = [];
-    var remoteSet = false;
-
-    // No STUN for localhost — use host candidates only for speed
-    var pc = new RTCPeerConnection({
-      iceServers: [],
-      iceTransportPolicy: 'all',
-    });
-    peerRef.current = pc;
-
-    // Add local stream tracks
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(function(t) {
-        console.log('[Admin] Adding track:', t.kind);
-        pc.addTrack(t, streamRef.current);
-      });
-    } else {
-      console.warn('[Admin] No stream available yet');
-    }
-
-    pc.ontrack = function(e) {
-      console.log('[Admin] Got remote track:', e.track.kind, 'streams:', e.streams.length);
-      if (!e.streams || !e.streams[0]) return;
-      var remoteStream = e.streams[0];
-      setStudentConnected(true);
-      var att = 0;
-      var iv2 = setInterval(function() {
-        att++;
-        if (att > 50) { clearInterval(iv2); return; }
-        if (!studentVidRef.current) return;
-        clearInterval(iv2);
-        studentVidRef.current.srcObject = remoteStream;
-        studentVidRef.current.play().catch(function(e){ console.warn('play err', e); });
-        console.log('[Admin] Student video attached');
-      }, 100);
-    };
-
-    pc.onicecandidate = function(e) {
-      if (e.candidate) {
-        console.log('[Admin] Sending ICE candidate to student');
-        sock.emit('ice-candidate', { viva_id: vivaId, to: studentSocketId, candidate: e.candidate });
-      } else {
-        console.log('[Admin] ICE gathering complete');
-      }
-    };
-
-    pc.oniceconnectionstatechange = function() {
-      console.log('[Admin] ICE connection state:', pc.iceConnectionState);
-      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+    sock.on('peer-joined', function(data) {
+      if (data.role === 'student') {
+        console.log('[Admin] Student joined:', data.socketId);
         setStudentConnected(true);
+        store.addToast('Student joined the room', 'success');
       }
-    };
+    });
 
-    pc.onconnectionstatechange = function() {
-      console.log('[Admin] Peer connection state:', pc.connectionState);
-      if (pc.connectionState === 'connected') setStudentConnected(true);
-      if (pc.connectionState === 'failed') {
-        console.warn('[Admin] Connection failed, restarting ICE');
-        try { pc.restartIce(); } catch(er) {}
-      }
-    };
-
-    // Re-register answer handler with candidate buffering
-    sock.off('answer');
-    sock.on('answer', async function(data) {
-      console.log('[Admin] Received answer from student');
-      var p = peerRef.current;
-      if (!p) { console.warn('[Admin] No peer for answer'); return; }
-      if (p.remoteDescription) { console.warn('[Admin] Remote desc already set'); return; }
-      try {
-        await p.setRemoteDescription(new RTCSessionDescription(data.answer));
-        remoteSet = true;
-        console.log('[Admin] Remote description set, draining', pendingCandidates.length, 'candidates');
-        for (var c of pendingCandidates) {
-          try { await p.addIceCandidate(new RTCIceCandidate(c)); } catch(ex) { console.warn('candidate err', ex); }
+    sock.on('peer-left', function(data) {
+      if (data.role === 'student') {
+        setStudentConnected(false);
+        if (studentVidRef.current) {
+          var ctx = studentVidRef.current.getContext('2d');
+          ctx.clearRect(0, 0, studentVidRef.current.width, studentVidRef.current.height);
         }
-        pendingCandidates = [];
-      } catch(e) { console.warn('[Admin] setRemoteDescription failed:', e); }
-    });
-
-    // Re-register ICE handler with buffering
-    sock.off('ice-candidate');
-    sock.on('ice-candidate', async function(data) {
-      if (!data.candidate) return;
-      var p = peerRef.current;
-      if (!p) return;
-      if (!remoteSet) {
-        console.log('[Admin] Buffering ICE candidate (no remote desc yet)');
-        pendingCandidates.push(data.candidate);
-      } else {
-        try { await p.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch(e) {}
       }
     });
 
-    try {
-      var offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
-      await pc.setLocalDescription(offer);
-      console.log('[Admin] Offer created and sent to', studentSocketId);
-      sock.emit('offer', { viva_id: vivaId, to: studentSocketId, offer: pc.localDescription });
-    } catch(e) { console.warn('[Admin] createOffer failed:', e); }
+    // Receive student video frame
+    sock.on('remote-frame', function(data) {
+      if (data.role !== 'student') return;
+      var canvas = studentVidRef.current;
+      if (!canvas) return;
+      var img = new Image();
+      img.onload = function() {
+        try {
+          var ctx = canvas.getContext('2d');
+          canvas.width = img.width;
+          canvas.height = img.height;
+          ctx.drawImage(img, 0, 0);
+        } catch(e) {}
+      };
+      img.src = data.frame;
+    });
+
+    // Receive student audio
+    var adminAudioCtx = null;
+    sock.on('remote-audio', function(data) {
+      if (data.role !== 'student') return;
+      try {
+        if (!adminAudioCtx) adminAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        var buf = adminAudioCtx.createBuffer(1, data.chunk.length, 44100);
+        buf.getChannelData(0).set(new Float32Array(data.chunk));
+        var src2 = adminAudioCtx.createBufferSource();
+        src2.buffer = buf;
+        src2.connect(adminAudioCtx.destination);
+        src2.start();
+      } catch(e) {}
+    });
+
+    sock.on('session-ended', function() { store.addToast('Session ended by student', 'info'); });
+
+    // Start sending admin video + audio after stream is ready
+    var waitStream = setInterval(function() {
+      if (!streamRef.current) return;
+      clearInterval(waitStream);
+      startSendingFrames(sock, vivaId);
+      startSendingAudio(sock, vivaId);
+    }, 500);
   }
+
+  function startSendingFrames(sock, vivaId) {
+    clearInterval(frameIntervalRef.current);
+    var captureCanvas = document.createElement('canvas');
+    var captureCtx = captureCanvas.getContext('2d');
+    frameIntervalRef.current = setInterval(function() {
+      if (!streamRef.current || !sock || !sock.connected) return;
+      var videoEl = videoRef.current;
+      if (!videoEl || videoEl.readyState < 2) return;
+      try {
+        captureCanvas.width  = 320;
+        captureCanvas.height = 240;
+        captureCtx.drawImage(videoEl, 0, 0, 320, 240);
+        var frame = captureCanvas.toDataURL('image/jpeg', 0.5);
+        sock.emit('video-frame', frame);
+      } catch(e) {}
+    }, 100);
+  }
+
+  function startSendingAudio(sock, vivaId) {
+    if (!streamRef.current) return;
+    var audioTracks = streamRef.current.getAudioTracks();
+    if (!audioTracks || audioTracks.length === 0) return;
+    try {
+      var audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      var src = audioCtx.createMediaStreamSource(streamRef.current);
+      var proc = audioCtx.createScriptProcessor(2048, 1, 1);
+      proc.onaudioprocess = function(e) {
+        if (!sock || !sock.connected) return;
+        var data = e.inputBuffer.getChannelData(0);
+        sock.emit('audio-chunk', Array.from(data));
+      };
+      src.connect(proc);
+      proc.connect(audioCtx.destination);
+      audioProcessorRef.current = { audioCtx, proc, src };
+    } catch(e) { console.warn('[Admin] Audio relay failed:', e); }
+  }
+
+  function stopFrameRelay() {
+    clearInterval(frameIntervalRef.current);
+    if (audioProcessorRef.current) {
+      try {
+        audioProcessorRef.current.proc.disconnect();
+        audioProcessorRef.current.src.disconnect();
+        audioProcessorRef.current.audioCtx.close();
+      } catch(e) {}
+      audioProcessorRef.current = null;
+    }
+  }
+
+  async function createOfferForStudent() {}
+
+
   async function startFaceDetection() {
     try {
       await loadFaceAPI();
@@ -499,6 +476,7 @@ export default function VivaRoom() {
   }
 
   function stopAll() {
+    stopFrameRelay();
     clearInterval(pollRef.current); clearInterval(awayTimerRef.current);
     clearInterval(faceIntRef.current); clearInterval(sigPollRef.current);
     clearTimeout(graceRef.current); clearTimeout(silenceTimer.current);
@@ -1183,7 +1161,7 @@ export default function VivaRoom() {
           <div className="card" style={{ padding: 10 }}>
             <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#9ca3af', letterSpacing: 1, marginBottom: 5, textAlign: 'center', fontFamily: 'JetBrains Mono,monospace' }}>🎓 STUDENT</div>
             <div style={{ position: 'relative', borderRadius: 7, overflow: 'hidden', background: '#111', lineHeight: 0 }}>
-              <video ref={studentVidRef} autoPlay playsInline style={{ width: '100%', height: 130, objectFit: 'cover', display: 'block' }}/>
+              <canvas ref={studentVidRef} style={{ width: '100%', height: 130, objectFit: 'cover', display: 'block', background: '#111' }}/>
               {!studentConnected && (
                 <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 4 }}>
                   <span style={{ fontSize: '1.5rem', opacity: .3 }}>👤</span>
