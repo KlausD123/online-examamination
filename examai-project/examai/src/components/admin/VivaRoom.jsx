@@ -260,15 +260,48 @@ export default function VivaRoom() {
   // ── Camera + face detection ──────────────────────────────────────────────
   async function startCamera() {
     try {
-      var stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+      var stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+        audio: true   // admin mic needed for student to hear questions
+      });
       streamRef.current = stream;
+
+      // Attach to video element — retry until element is mounted
+      var attempts = 0;
       var iv = setInterval(function() {
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream; clearInterval(iv);
-          videoRef.current.onloadedmetadata = function() { setCamReady(true); startFaceDetection(); setTimeout(setupWebRTC, 800); };
+        attempts++;
+        if (attempts > 50) { clearInterval(iv); return; } // 10s timeout
+        if (!videoRef.current) return;
+        clearInterval(iv);
+        videoRef.current.srcObject = stream;
+        videoRef.current.muted = true; // mute own audio to avoid echo
+        // Use both onloadedmetadata AND a timeout fallback
+        var started = false;
+        function onReady() {
+          if (started) return;
+          started = true;
+          setCamReady(true);
+          setFaceStatus('ok');
+          startFaceDetection();
+          setTimeout(setupWebRTC, 500);
         }
+        videoRef.current.onloadedmetadata = onReady;
+        videoRef.current.oncanplay = onReady;
+        // Fallback: if neither fires within 2s, proceed anyway
+        setTimeout(onReady, 2000);
+        videoRef.current.play().catch(function() {});
       }, 200);
-    } catch(e) { setFaceStatus('unavailable'); }
+    } catch(e) {
+      console.warn('Camera error:', e.name, e.message);
+      setFaceStatus('unavailable');
+      // Still try audio-only so admin can at least speak
+      try {
+        var audioOnly = await navigator.mediaDevices.getUserMedia({ audio: true });
+        streamRef.current = audioOnly;
+        setCamReady(true);
+        setTimeout(setupWebRTC, 500);
+      } catch(e2) {}
+    }
   }
 
   // ── WebRTC via Socket.IO — admin side ───────────────────────
@@ -337,6 +370,7 @@ export default function VivaRoom() {
     pc.ontrack = function(e) {
       if (studentVidRef.current && e.streams && e.streams[0]) {
         studentVidRef.current.srcObject = e.streams[0];
+        studentVidRef.current.play().catch(function(){});
         setStudentConnected(true);
       }
     };

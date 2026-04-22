@@ -218,11 +218,19 @@ export default function VivaJoin() {
 
   function enterRoom() {
     phaseRef.current = 'room'; setPhase('room');
-    setTimeout(function() {
-      if (selfVidRef.current && streamRef.current) selfVidRef.current.srcObject = streamRef.current;
-      setupStudentWebRTC();
-    }, 400);
     startMasterInterval();
+    // Attach own video — retry until element mounted
+    var attempts = 0;
+    var iv = setInterval(function() {
+      attempts++;
+      if (attempts > 30) { clearInterval(iv); return; }
+      if (!selfVidRef.current || !streamRef.current) return;
+      clearInterval(iv);
+      selfVidRef.current.srcObject = streamRef.current;
+      selfVidRef.current.muted = true;
+      selfVidRef.current.play().catch(function(){});
+      setupStudentWebRTC();
+    }, 200);
   }
 
   // ── WebRTC via Socket.IO signaling ──────────────────────────
@@ -288,6 +296,7 @@ export default function VivaJoin() {
     pc.ontrack = function(e) {
       if (adminVidRef.current && e.streams && e.streams[0]) {
         adminVidRef.current.srcObject = e.streams[0];
+        adminVidRef.current.play().catch(function(){});
         setAdminConnected(true);
       }
     };
