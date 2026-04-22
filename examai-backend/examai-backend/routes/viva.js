@@ -152,8 +152,6 @@ router.post('/:viva_id/cancel-invites', requireAdmin, async (req, res) => {
   }
 });
 
-module.exports = router;
-
 // Mark session as ended — clears all invitations from every invited student
 router.post('/:viva_id/end', requireAdmin, async (req, res) => {
   try {
@@ -235,8 +233,8 @@ var signalingStore = {}; // in-memory: { viva_id: { offer, answer, adminCandidat
 
 router.post('/:viva_id/signal/offer', authenticateToken, async (req, res) => {
   var id = req.params.viva_id;
-  if (!signalingStore[id]) signalingStore[id] = { adminCandidates: [], studentCandidates: [] };
-  signalingStore[id].offer = req.body.offer;
+  // Fresh offer = reset everything for this room
+  signalingStore[id] = { adminCandidates: [], studentCandidates: [], offer: req.body.offer, answer: null };
   res.json({ ok: true });
 });
 
@@ -273,3 +271,5 @@ router.get('/:viva_id/signal/candidates/:role', authenticateToken, async (req, r
   var data = signalingStore[id] || { adminCandidates: [], studentCandidates: [] };
   res.json({ candidates: role === 'admin' ? data.adminCandidates : data.studentCandidates });
 });
+
+module.exports = router;

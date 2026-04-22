@@ -225,39 +225,78 @@ export default function VivaJoin() {
     if (!vid || !streamRef.current) return;
     var token   = localStorage.getItem('examai_token');
     var headers = { 'Content-Type':'application/json', Authorization:'Bearer '+token };
+
+    if (peerRef.current) { try { peerRef.current.close(); } catch(e){} peerRef.current = null; }
+
     try {
       var pc = new RTCPeerConnection({
-        iceServers: [{ urls:'stun:stun.l.google.com:19302' }, { urls:'stun:stun1.l.google.com:19302' }]
+        iceServers: [
+          { urls:'stun:stun.l.google.com:19302' },
+          { urls:'stun:stun1.l.google.com:19302' },
+          { urls:'stun:stun2.l.google.com:19302' },
+        ]
       });
       peerRef.current = pc;
+
+      var pendingCandidates = [];
+
       streamRef.current.getTracks().forEach(function(t){ pc.addTrack(t, streamRef.current); });
+
       pc.ontrack = function(e) {
         if (adminVidRef.current && e.streams && e.streams[0]) {
           adminVidRef.current.srcObject = e.streams[0];
           setAdminConnected(true);
         }
       };
+
       pc.onicecandidate = function(e) {
         if (e.candidate) fetch('http://localhost:5000/api/viva/'+vid+'/signal/candidate', {
           method:'POST', headers, body:JSON.stringify({ role:'student', candidate:e.candidate })
         }).catch(function(){});
       };
-      // Poll for admin offer
+
+      pc.onconnectionstatechange = function() {
+        if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+          try { pc.restartIce(); } catch(e2) {}
+        }
+      };
+
+      // Poll for admin offer — up to 5 minutes (150 tries x 2s)
       var tries = 0;
       var poll = setInterval(async function() {
-        tries++; if (tries > 30) { clearInterval(poll); return; }
+        tries++;
+        if (tries > 150 || !peerRef.current) { clearInterval(poll); return; }
         try {
           var r = await fetch('http://localhost:5000/api/viva/'+vid+'/signal/offer', { headers:{Authorization:'Bearer '+token} });
           var data = await r.json();
           if (data.offer && pc.remoteDescription === null) {
             clearInterval(poll);
             await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+
             var answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
-            await fetch('http://localhost:5000/api/viva/'+vid+'/signal/answer', { method:'POST', headers, body:JSON.stringify({ answer:pc.localDescription }) });
+            await fetch('http://localhost:5000/api/viva/'+vid+'/signal/answer', {
+              method:'POST', headers, body:JSON.stringify({ answer:pc.localDescription })
+            });
+
+            // Drain buffered then fetch admin candidates
+            for (var bc of pendingCandidates) { try { await pc.addIceCandidate(new RTCIceCandidate(bc)); } catch(e){} }
+            pendingCandidates = [];
+
             var cr = await fetch('http://localhost:5000/api/viva/'+vid+'/signal/candidates/admin', { headers:{Authorization:'Bearer '+token} });
             var cd = await cr.json();
-            (cd.candidates||[]).forEach(function(c){ pc.addIceCandidate(new RTCIceCandidate(c)).catch(function(){}); });
+            for (var c of (cd.candidates||[])) { try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch(e){} }
+
+            // Keep polling for late admin candidates for 30s
+            var latePoll = setInterval(async function() {
+              if (!peerRef.current) { clearInterval(latePoll); return; }
+              try {
+                var lr = await fetch('http://localhost:5000/api/viva/'+vid+'/signal/candidates/admin', { headers:{Authorization:'Bearer '+token} });
+                var ld = await lr.json();
+                for (var lc of (ld.candidates||[])) { try { await pc.addIceCandidate(new RTCIceCandidate(lc)); } catch(e){} }
+              } catch(e) {}
+            }, 3000);
+            setTimeout(function() { clearInterval(latePoll); }, 30000);
           }
         } catch(e2){}
       }, 2000);

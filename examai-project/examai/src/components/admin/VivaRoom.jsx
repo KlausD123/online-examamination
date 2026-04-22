@@ -270,25 +270,80 @@ export default function VivaRoom() {
   async function setupWebRTC() {
     var vivaId = savedVivaRef.current ? savedVivaRef.current.viva_id : null;
     if (!vivaId || !streamRef.current) return;
+
+    if (peerRef.current) { try { peerRef.current.close(); } catch(e) {} peerRef.current = null; }
+
     try {
-      var pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+      var pc = new RTCPeerConnection({
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' },
+        ]
+      });
       peerRef.current = pc;
+
       streamRef.current.getTracks().forEach(function(t) { pc.addTrack(t, streamRef.current); });
-      pc.ontrack = function(e) { if (studentVidRef.current && e.streams && e.streams[0]) { studentVidRef.current.srcObject = e.streams[0]; setStudentConnected(true); } };
-      pc.onicecandidate = function(e) {
-        if (e.candidate) fetch(API + '/viva/' + vivaId + '/signal/candidate', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() }, body: JSON.stringify({ role: 'admin', candidate: e.candidate }) }).catch(function() {});
+
+      pc.ontrack = function(e) {
+        if (studentVidRef.current && e.streams && e.streams[0]) {
+          studentVidRef.current.srcObject = e.streams[0];
+          setStudentConnected(true);
+        }
       };
-      var offer = await pc.createOffer(); await pc.setLocalDescription(offer);
-      await fetch(API + '/viva/' + vivaId + '/signal/offer', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() }, body: JSON.stringify({ offer: pc.localDescription }) });
+
+      // Send our ICE candidates — store them first, then keep sending new ones
+      pc.onicecandidate = function(e) {
+        if (e.candidate) {
+          fetch(API + '/viva/' + vivaId + '/signal/candidate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() },
+            body: JSON.stringify({ role: 'admin', candidate: e.candidate })
+          }).catch(function() {});
+        }
+      };
+
+      pc.onconnectionstatechange = function() {
+        if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+          try { pc.restartIce(); } catch(e) {}
+        }
+      };
+
+      // Create and store offer
+      var offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      await fetch(API + '/viva/' + vivaId + '/signal/offer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() },
+        body: JSON.stringify({ offer: pc.localDescription })
+      });
+
+      // Poll for student answer
+      clearInterval(sigPollRef.current);
       sigPollRef.current = setInterval(async function() {
+        if (!peerRef.current) { clearInterval(sigPollRef.current); return; }
         try {
           var r = await fetch(API + '/viva/' + vivaId + '/signal/answer', { headers: { Authorization: 'Bearer ' + getToken() } });
           var data = await r.json();
           if (data.answer && pc.remoteDescription === null) {
-            await pc.setRemoteDescription(new RTCSessionDescription(data.answer)); clearInterval(sigPollRef.current);
+            clearInterval(sigPollRef.current);
+            await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+
+            // Fetch student ICE candidates
             var cr = await fetch(API + '/viva/' + vivaId + '/signal/candidates/student', { headers: { Authorization: 'Bearer ' + getToken() } });
             var cd = await cr.json();
-            (cd.candidates || []).forEach(function(c) { pc.addIceCandidate(new RTCIceCandidate(c)).catch(function() {}); });
+            for (var c of (cd.candidates || [])) { try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch(e) {} }
+
+            // Keep polling for late student candidates for 30s
+            var latePoll = setInterval(async function() {
+              if (!peerRef.current) { clearInterval(latePoll); return; }
+              try {
+                var lr = await fetch(API + '/viva/' + vivaId + '/signal/candidates/student', { headers: { Authorization: 'Bearer ' + getToken() } });
+                var ld = await lr.json();
+                for (var lc of (ld.candidates || [])) { try { await pc.addIceCandidate(new RTCIceCandidate(lc)); } catch(e) {} }
+              } catch(e) {}
+            }, 3000);
+            setTimeout(function() { clearInterval(latePoll); }, 30000);
           }
         } catch(e) {}
       }, 2000);
