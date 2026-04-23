@@ -127,6 +127,8 @@ export default function VivaRoom() {
   var [capturedText,setCapturedText]= useState('');
   var [statusMsg,   setStatusMsg]   = useState('');
   var [verdict,     setVerdict]     = useState(null);
+  var [followUpQ,   setFollowUpQ]   = useState('');
+  var [followUpLoading, setFollowUpLoading] = useState(false);
   var [manualText,  setManualText]  = useState('');
   var [examNotes,   setExamNotes]   = useState('');
 
@@ -370,7 +372,8 @@ export default function VivaRoom() {
       console.log('[Admin] peer-joined:', data.role, data.userName);
       if (data.role === 'student') {
         setStudentConnected(true);
-        store.addToast((data.userName||'Student') + ' joined — click 📷 Start Cam', 'success');
+        store.addToast((data.userName||'Student') + ' joined the room', 'success');
+        setAlerts(function(a) { return [{ title: '🟢 ' + (data.userName||'Student') + ' joined the room', type: 'success', time: new Date().toLocaleTimeString() }].concat(a).slice(0,20); });
       }
     });
 
@@ -402,6 +405,7 @@ export default function VivaRoom() {
         setStudentConnected(false);
         if (studentVidRef.current) studentVidRef.current.srcObject = null;
         if (pcRef.current) { try{pcRef.current.close();}catch(e){} pcRef.current = null; }
+        setAlerts(function(a) { return [{ title: '🔴 ' + (data.userName||'Student') + ' left the room', type: 'urgent', time: new Date().toLocaleTimeString() }].concat(a).slice(0,20); });
       }
     });
   }
@@ -611,6 +615,7 @@ export default function VivaRoom() {
 
   // Admin clicks "Next Question" in sequence
   function handleNextQuestion() {
+    setFollowUpQ('');
     var nextIdx = askedQIdxRef.current + 1;
     if (nextIdx >= questionsRef.current.length) {
       setFlow('done'); flowRef.current = 'done';
@@ -648,6 +653,19 @@ export default function VivaRoom() {
     setTranscript([]); setVerdict(null); capturedRef.current = '';
     setCapturedText(''); setManualText(''); setStatusMsg(''); setManualQMode(false);
     speakAndListen(questions[0].question);
+  }
+
+  async function generateFollowUp() {
+    var lastT = transcript[transcript.length - 1];
+    if (!lastT) return;
+    setFollowUpLoading(true); setFollowUpQ('');
+    try {
+      var prompt = 'Original question: ' + lastT.question + '\nStudent answered: ' + (lastT.student_said || 'no answer') + '\nMissing points: ' + (lastT.missing || 'none') + '\n\nGenerate ONE concise follow-up question (max 20 words) to probe deeper or clarify what was missing. Return only the question text, no quotes.';
+      var resp = await groqChat([{ role: 'user', content: prompt }], 80, 0.7);
+      var fq = (resp || '').trim().replace(/^["']|["']$/g, '');
+      setFollowUpQ(fq);
+    } catch(e) { setFollowUpQ('Could not generate follow-up: ' + e.message); }
+    setFollowUpLoading(false);
   }
 
   async function handleManualGrade() {
@@ -1128,14 +1146,19 @@ export default function VivaRoom() {
         {selStudentName && <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#a78bfa' }}>{selStudentName}</span>}
       </div>
 
-      {/* Student Activity — always visible */}
-      <div className="card" style={{ marginBottom: 10, maxHeight: 160, overflowY: 'auto' }}>
+      {/* Student Activity — join/left only */}
+      <div className="card" style={{ marginBottom: 10, maxHeight: 140, overflowY: 'auto' }}>
         <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#9ca3af', letterSpacing: 1, marginBottom: 6, fontFamily: 'JetBrains Mono,monospace' }}>STUDENT ACTIVITY</div>
         {alerts.length === 0
-          ? <div style={{ fontSize: '0.78rem', color: '#6b7280', textAlign: 'center', padding: '4px 0' }}>No alerts</div>
+          ? <div style={{ fontSize: '0.78rem', color: '#6b7280', textAlign: 'center', padding: '4px 0' }}>Waiting for student…</div>
           : alerts.map(function(a, idx2) {
-              var col = a.type === 'urgent' ? '#dc2626' : a.type === 'success' ? '#16a34a' : '#d97706';
-              return <div key={idx2} style={{ padding: '4px 8px', borderLeft: '3px solid ' + col, marginBottom: 2, fontSize: '0.74rem' }}><span style={{ fontWeight: 700, color: col }}>{a.title}</span></div>;
+              var col = a.type === 'urgent' ? '#dc2626' : '#16a34a';
+              return (
+                <div key={idx2} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 8px', borderLeft: '3px solid ' + col, marginBottom: 3, fontSize: '0.74rem', background: 'rgba(255,255,255,.03)', borderRadius: '0 4px 4px 0' }}>
+                  <span style={{ fontWeight: 700, color: col }}>{a.title}</span>
+                  {a.time && <span style={{ fontSize: '0.65rem', color: '#6b7280' }}>{a.time}</span>}
+                </div>
+              );
             })
         }
       </div>
@@ -1208,11 +1231,10 @@ export default function VivaRoom() {
         {/* MIDDLE: live oral flow */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, overflow: 'auto' }}>
 
-          {/* Start button */}
+          {/* No start button needed — examiner clicks Ask directly */}
           {flow === 'idle' && questions.length > 0 && transcript.length === 0 && (
-            <div style={{ textAlign: 'center', padding: '20px 0' }}>
-              <button className="btn btn-success btn-lg" onClick={startVivaFlow} style={{ boxShadow: '0 4px 24px rgba(22,163,74,.4)', padding: '14px 36px' }}>🎙 Start Oral Viva</button>
-              <div style={{ fontSize: '0.8rem', color: '#9ca3af', marginTop: 10, lineHeight: 1.6 }}>You control each question. Click Ask to read it aloud, then student speaks.</div>
+            <div style={{ padding: '10px 14px', background: 'rgba(124,58,237,.08)', border: '1px solid rgba(124,58,237,.2)', borderRadius: 8, fontSize: '0.8rem', color: '#a78bfa', textAlign: 'center' }}>
+              👆 Click <strong>Ask</strong> next to any question on the right to begin
             </div>
           )}
 
@@ -1386,6 +1408,40 @@ export default function VivaRoom() {
                 )}
               </div>
               {statusMsg && <div style={{ marginTop: 7, fontSize: '0.75rem', color: statusMsg.startsWith('✓') || statusMsg.startsWith('✅') ? '#4ade80' : '#9ca3af', textAlign: 'center' }}>{statusMsg}</div>}
+            </div>
+          )}
+
+          {/* ── Follow-Up Question Section (shown after grading) ── */}
+          {verdict && flow === 'waiting' && transcript.length > 0 && (
+            <div className="card" style={{ borderLeft: '3px solid #f59e0b' }}>
+              <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#fbbf24', letterSpacing: 1, marginBottom: 10, fontFamily: 'JetBrains Mono,monospace' }}>
+                💬 FOLLOW-UP QUESTION
+              </div>
+              {!followUpQ ? (
+                <button className="btn btn-warning btn-sm" style={{ width: '100%' }}
+                  onClick={generateFollowUp} disabled={followUpLoading}>
+                  {followUpLoading ? '⚡ Generating…' : '✨ Generate Follow-Up Based on Student Answer'}
+                </button>
+              ) : (
+                <div>
+                  <div style={{ padding: '10px 14px', background: 'rgba(245,158,11,.1)', border: '1px solid rgba(245,158,11,.3)', borderRadius: 8, fontWeight: 700, fontSize: '0.95rem', color: '#fef3c7', lineHeight: 1.5, marginBottom: 10 }}>
+                    {followUpQ}
+                  </div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button className="btn btn-success btn-sm" style={{ flex: 1 }} onClick={function() {
+                      // Ask follow-up as manual question — add to questions list and ask it
+                      var fq = { question: followUpQ, model_answer: '', _custom: true, _followup: true };
+                      var newQs = questions.concat([fq]);
+                      setQuestions(newQs); questionsRef.current = newQs;
+                      var newIdx = newQs.length - 1;
+                      setFollowUpQ('');
+                      setTimeout(function() { handleAskQuestion(newIdx); }, 100);
+                    }}>🎙 Ask This Follow-Up</button>
+                    <button className="btn btn-ghost btn-sm" onClick={generateFollowUp} disabled={followUpLoading}>↻ Regenerate</button>
+                    <button className="btn btn-ghost btn-sm" onClick={function() { setFollowUpQ(''); }}>✕</button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

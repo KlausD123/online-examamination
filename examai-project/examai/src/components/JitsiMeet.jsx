@@ -11,37 +11,37 @@ export default function JitsiMeet({ roomName, displayName, height }) {
       if (apiRef.current) { try { apiRef.current.dispose(); } catch(e){} apiRef.current = null; }
       if (!containerRef.current) return;
 
+      // Store name in localStorage so Jitsi remembers it on refresh
+      try { localStorage.setItem('jitsiDisplayName', displayName || 'User'); } catch(e) {}
+
       try {
         apiRef.current = new window.JitsiMeetExternalAPI('meet.jit.si', {
-          roomName: 'dexam-viva-' + roomName,
+          roomName: 'dexam-' + roomName,
           width: '100%',
           height: height || 380,
           parentNode: containerRef.current,
-          userInfo: { displayName: displayName || 'User' },
+          userInfo: {
+            displayName: displayName || 'User',
+            email: ''
+          },
           configOverwrite: {
-            prejoinPageEnabled: false,
+            prejoinPageEnabled: false,         // Skip pre-join page (no login screen)
             startWithAudioMuted: false,
             startWithVideoMuted: false,
             disableDeepLinking: true,
             enableWelcomePage: false,
-            requireDisplayName: false,
+            requireDisplayName: false,         // Don't ask for name
             disableThirdPartyRequests: true,
-            // Hide all branding/ads
-            brandingDataUrl: '',
-            dynamicBrandingUrl: '',
             hideConferenceSubject: true,
-            hideConferenceTimer: false,
             toolbarButtons: ['microphone', 'camera', 'hangup', 'fullscreen', 'tileview'],
-            // Disable features that show ads or external content
             disablePolls: true,
-            giphy: { enabled: false },
-            whiteboard: { enabled: false },
+            subject: ' ',                      // Empty subject hides room name banner
+            defaultLocalDisplayName: displayName || 'User',
           },
           interfaceConfigOverwrite: {
             SHOW_JITSI_WATERMARK: false,
             SHOW_WATERMARK_FOR_GUESTS: false,
             SHOW_BRAND_WATERMARK: false,
-            BRAND_WATERMARK_LINK: '',
             SHOW_POWERED_BY: false,
             DISPLAY_WELCOME_FOOTER: false,
             HIDE_INVITE_MORE_HEADER: true,
@@ -51,6 +51,7 @@ export default function JitsiMeet({ roomName, displayName, height }) {
             APP_NAME: 'DExam Viva',
             NATIVE_APP_NAME: 'DExam',
             PROVIDER_NAME: 'DExam',
+            DEFAULT_LOCAL_DISPLAY_NAME: displayName || 'User',
           }
         });
       } catch(e) {
@@ -63,14 +64,19 @@ export default function JitsiMeet({ roomName, displayName, height }) {
     } else {
       var existing = document.querySelector('script[src*="meet.jit.si/external_api"]');
       if (existing) {
-        existing.addEventListener('load', init);
+        // Script already loading — wait for it
+        if (!window.JitsiMeetExternalAPI) {
+          existing.addEventListener('load', init);
+        } else {
+          init();
+        }
         return;
       }
       var script = document.createElement('script');
       script.src = 'https://meet.jit.si/external_api.js';
       script.async = true;
       script.onload = init;
-      script.onerror = function() { console.error('[Jitsi] Failed to load API script'); };
+      script.onerror = function() { console.error('[Jitsi] Failed to load API'); };
       document.head.appendChild(script);
     }
 
