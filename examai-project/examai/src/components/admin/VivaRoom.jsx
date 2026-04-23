@@ -6,13 +6,7 @@ import { io as ioClient } from 'socket.io-client';
 
 var SOCKET_URL = 'http://localhost:5000';
 
-var ICE_SERVERS = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' },
-  { urls: 'turn:openrelay.metered.ca:80',     username: 'openrelayproject', credential: 'openrelayproject' },
-  { urls: 'turn:openrelay.metered.ca:443',    username: 'openrelayproject', credential: 'openrelayproject' },
-  { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
-];
+var ICE_SERVERS = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
 
 var API = 'http://localhost:5000/api';
 var SESSION_KEY = 'dexam_viva_session';
@@ -313,12 +307,11 @@ export default function VivaRoom() {
     }, 200);
   }
 
-  // ── WebRTC video/audio — admin side ───────────────────────────────────────
-  var frameIntervalRef  = useRef(null);  // kept for compat
-  var audioProcessorRef = useRef(null);  // kept for compat
-  var pcRef             = useRef(null);  // RTCPeerConnection
-  var studentSocketId   = useRef(null);  // current student's socket ID
-  var studentVidStream  = useRef(null);  // student's remote MediaStream
+  // ── WebRTC signaling — same pattern as shared VivaRoom component ─────────────
+  // ── WebRTC — admin side (working pattern) ───────────────────────────────────
+  var frameIntervalRef  = useRef(null);
+  var audioProcessorRef = useRef(null);
+  var pcRef             = useRef(null);
 
   function setupWebRTC() {
     var vivaId = savedVivaRef.current ? savedVivaRef.current.viva_id : null;
@@ -327,153 +320,134 @@ export default function VivaRoom() {
     if (socketRef.current) { try { socketRef.current.disconnect(); } catch(e) {} socketRef.current = null; }
     if (pcRef.current) { try { pcRef.current.close(); } catch(e) {} pcRef.current = null; }
 
-    var sock = ioClient(SOCKET_URL, { transports: ['websocket', 'polling'] });
-    socketRef.current = sock;
+    // Get camera + mic
+    navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(function(stream) {
+      streamRef.current = stream;
+      var att = 0;
+      var iv = setInterval(function() {
+        if (++att > 50) { clearInterval(iv); return; }
+        if (!videoRef.current) return;
+        clearInterval(iv);
+        videoRef.current.srcObject = stream;
+        videoRef.current.muted = true;
+        videoRef.current.play().catch(function(){});
+        setCamReady(true); setFaceStatus('loading'); startFaceDetection();
+      }, 100);
 
-    sock.on('connect', function() {
-      console.log('[Admin] Socket connected:', sock.id);
-      sock.emit('join-viva', { viva_id: vivaId, role: 'admin', name: 'Examiner' });
-    });
+      var sock = ioClient(SOCKET_URL);
+      socketRef.current = sock;
 
-    sock.on('room-joined', function() {
-      console.log('[Admin] Joined room, waiting for students...');
-    });
+      sock.on('connect', function() {
+        console.log('[Admin] Socket connected:', sock.id);
+        sock.emit('join-viva-room', { vivaId: vivaId, role: 'admin', userName: 'Examiner' });
+      });
 
-    // A student joined — create WebRTC offer to them
-    sock.on('student-joined', function(data) {
-      console.log('[Admin] Student joined:', data.name, data.studentId);
-      studentSocketId.current = data.studentId;
-      setStudentConnected(true);
-      store.addToast((data.name || 'Student') + ' joined the room', 'success');
-      createAndSendOffer(sock, data.studentId);
-    });
+      sock.on('room-members', function(members) {
+        members.forEach(function(m) {
+          if (m.role === 'student') {
+            console.log('[Admin] Student already in room:', m.userName);
+            setStudentConnected(true);
+            store.addToast((m.userName || 'Student') + ' is in the room', 'success');
+            createOffer(vivaId, stream);
+          }
+        });
+      });
 
-    // Buffer ICE candidates that arrive before remoteDescription is set
-    var pendingIce = [];
-    var remoteSet = false;
-
-    sock.on('answer', async function(data) {
-      console.log('[Admin] Received answer from student');
-      if (!pcRef.current) return;
-      try {
-        await pcRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
-        remoteSet = true;
-        console.log('[Admin] Remote desc set, draining', pendingIce.length, 'buffered candidates');
-        for (var c of pendingIce) {
-          try { await pcRef.current.addIceCandidate(new RTCIceCandidate(c)); } catch(e) {}
+      sock.on('peer-joined', function(data) {
+        if (data.role === 'student') {
+          console.log('[Admin] Student joined:', data.userName);
+          setStudentConnected(true);
+          store.addToast((data.userName || 'Student') + ' joined the room', 'success');
+          createOffer(vivaId, stream);
         }
-        pendingIce = [];
-      } catch(e) { console.error('[Admin] setRemoteDescription failed:', e); }
-    });
+      });
 
-    sock.on('ice', async function(data) {
-      if (!data.candidate) return;
-      if (!remoteSet) {
-        pendingIce.push(data.candidate);
-        return;
-      }
-      if (pcRef.current) {
-        try { await pcRef.current.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch(e) {}
-      }
-    });
+      sock.on('webrtc-answer', function(data) {
+        console.log('[Admin] Received answer from student');
+        if (pcRef.current && pcRef.current.signalingState !== 'closed') {
+          pcRef.current.setRemoteDescription(new RTCSessionDescription(data.answer))
+            .then(function() { console.log('[Admin] Remote desc set OK'); })
+            .catch(function(e) { console.error('[Admin] setRemote failed:', e); });
+        }
+      });
 
-    sock.on('student-left', function(data) {
-      console.log('[Admin] Student left');
-      setStudentConnected(false);
-      if (studentVidRef.current) {
-        studentVidRef.current.srcObject = null;
-      }
-      if (pcRef.current) { try { pcRef.current.close(); } catch(e) {} pcRef.current = null; }
-    });
+      sock.on('webrtc-ice-candidate', function(data) {
+        if (pcRef.current && data.candidate) {
+          pcRef.current.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(function(){});
+        }
+      });
 
-    sock.on('disconnect', function() { setStudentConnected(false); });
-    sock.on('connect_error', function(e) { console.error('[Admin] Socket error:', e); });
+      sock.on('peer-left', function(data) {
+        if (data.role === 'student') {
+          setStudentConnected(false);
+          if (studentVidRef.current) studentVidRef.current.srcObject = null;
+          if (pcRef.current) { try { pcRef.current.close(); } catch(e) {} pcRef.current = null; }
+        }
+      });
+
+      sock.on('connect_error', function(e) { console.error('[Admin] Socket error:', e.message); });
+
+    }).catch(function(e) {
+      console.warn('[Admin] Camera failed:', e.name);
+      setFaceStatus('unavailable'); setPermBlocked(true);
+      var sock = ioClient(SOCKET_URL);
+      socketRef.current = sock;
+      sock.on('connect', function() { sock.emit('join-viva-room', { vivaId: vivaId, role: 'admin', userName: 'Examiner' }); });
+    });
   }
 
-  async function createAndSendOffer(sock, targetStudentId) {
-    // Wait for camera stream to be ready (up to 10s)
-    var waited = 0;
-    while (!streamRef.current && waited < 100) {
-      await new Promise(function(r) { setTimeout(r, 100); });
-      waited++;
-    }
+  function createOffer(vivaId, stream) {
+    if (pcRef.current) { try { pcRef.current.close(); } catch(e) {} }
+    var pc = new RTCPeerConnection(ICE_SERVERS);
+    pcRef.current = pc;
 
-    if (pcRef.current) { try { pcRef.current.close(); } catch(e) {} pcRef.current = null; }
+    stream.getTracks().forEach(function(track) {
+      console.log('[Admin] Adding track:', track.kind);
+      pc.addTrack(track, stream);
+    });
 
-    var p = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-    pcRef.current = p;
-
-    // Add admin's camera/mic tracks so student can see/hear admin
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(function(t) {
-        console.log('[Admin] Adding track to peer:', t.kind);
-        p.addTrack(t, streamRef.current);
-      });
-    } else {
-      console.warn('[Admin] No stream when creating offer!');
-    }
-
-    // When student's stream arrives — show in video element
-    p.ontrack = function(e) {
-      console.log('[Admin] Received student track:', e.track.kind);
-      if (e.streams && e.streams[0]) {
-        studentVidStream.current = e.streams[0];
-        setStudentConnected(true);
-        // Attach to video element
+    pc.ontrack = function(event) {
+      console.log('[Admin] Student track received:', event.track.kind);
+      if (event.streams && event.streams[0]) {
         var att = 0;
         var iv = setInterval(function() {
-          if (++att > 40) { clearInterval(iv); return; }
+          if (++att > 50) { clearInterval(iv); return; }
           if (!studentVidRef.current) return;
           clearInterval(iv);
-          studentVidRef.current.srcObject = e.streams[0];
+          studentVidRef.current.srcObject = event.streams[0];
           studentVidRef.current.play().catch(function(){});
-          console.log('[Admin] Student video attached!');
+          setStudentConnected(true);
+          console.log('[Admin] ✅ Student video LIVE!');
         }, 100);
       }
     };
 
-    // Send ICE candidates to student
-    p.onicecandidate = function(e) {
-      if (e.candidate && targetStudentId) {
-        sock.emit('ice', { to: targetStudentId, candidate: e.candidate });
+    pc.onicecandidate = function(event) {
+      if (event.candidate && socketRef.current) {
+        socketRef.current.emit('webrtc-ice-candidate', { vivaId: vivaId, candidate: event.candidate });
       }
     };
 
-    p.oniceconnectionstatechange = function() {
-      console.log('[Admin] ICE state:', p.iceConnectionState, '| Connection:', p.connectionState);
-      if (p.iceConnectionState === 'connected' || p.iceConnectionState === 'completed') {
-        setStudentConnected(true);
-        console.log('[Admin] ✅ WebRTC CONNECTED — live video active!');
-      }
-      if (p.iceConnectionState === 'failed') {
-        console.warn('[Admin] ❌ ICE failed — trying restart');
-        try { p.restartIce(); } catch(er) {}
-      }
+    pc.onconnectionstatechange = function() {
+      console.log('[Admin] Peer state:', pc.connectionState);
+      if (pc.connectionState === 'connected') { setStudentConnected(true); console.log('[Admin] ✅ WebRTC CONNECTED!'); }
+      if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') setStudentConnected(false);
     };
 
-    p.onicegatheringstatechange = function() {
-      console.log('[Admin] ICE gathering:', p.iceGatheringState);
-    };
-
-    p.onconnectionstatechange = function() {
-      console.log('[Admin] Connection state:', p.connectionState);
-    };
-
-    try {
-      var offer = await p.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
-      await p.setLocalDescription(offer);
-      sock.emit('offer', { to: targetStudentId, offer: p.localDescription });
-      console.log('[Admin] Offer sent to student');
-    } catch(e) { console.error('[Admin] createOffer failed:', e); }
+    pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true })
+      .then(function(offer) { return pc.setLocalDescription(offer); })
+      .then(function() {
+        console.log('[Admin] Offer sent to student');
+        socketRef.current.emit('webrtc-offer', { vivaId: vivaId, offer: pc.localDescription });
+      })
+      .catch(function(e) { console.error('[Admin] createOffer failed:', e); });
   }
 
   function stopFrameRelay() {
-    // Close WebRTC when stopping
     if (pcRef.current) { try { pcRef.current.close(); } catch(e) {} pcRef.current = null; }
   }
 
-  async function createOfferForStudent() {} // compat stub
-
+  async function createOfferForStudent() {}
 
   async function startFaceDetection() {
     try {
