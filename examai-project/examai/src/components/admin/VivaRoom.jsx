@@ -281,13 +281,19 @@ export default function VivaRoom() {
 
     if (!stream) {
       setFaceStatus('unavailable');
-      // Show clear instruction overlay instead of just a toast
       setPermBlocked(true);
       setTimeout(setupWebRTC, 500);
       return;
     }
 
     streamRef.current = stream;
+
+    // If socket already connected and joined, start sending frames immediately
+    if (socketRef.current && socketRef.current.connected) {
+      console.log('[Admin] Camera granted after socket connected — starting frames now');
+      startAdminVideo(socketRef.current);
+      startAdminAudio(socketRef.current);
+    }
 
     // Attach to video element — retry until element is mounted
     var attempts = 0;
@@ -363,26 +369,39 @@ export default function VivaRoom() {
       }
     });
 
-    var studentConnectedRef = { current: false }; // local ref to avoid stale closure
+    var studentConnectedRef = { current: false };
 
     sock.on('remote-frame', function(data) {
       if (data.role !== 'student') return;
       var canvas = studentVidRef.current;
       if (!canvas) return;
-      var img = new window.Image();
-      img.onload = function() {
-        try {
-          var ctx = canvas.getContext('2d');
-          canvas.width = img.width || 320;
-          canvas.height = img.height || 240;
-          ctx.drawImage(img, 0, 0);
-          if (!studentConnectedRef.current) {
-            studentConnectedRef.current = true;
-            setStudentConnected(true);
-          }
-        } catch(e) {}
-      };
-      img.src = data.frame;
+      // Use createImageBitmap for GPU-accelerated smooth rendering
+      fetch(data.frame).then(function(r) { return r.blob(); }).then(function(blob) {
+        return window.createImageBitmap(blob);
+      }).then(function(bmp) {
+        var ctx = canvas.getContext('2d');
+        if (canvas.width !== bmp.width) canvas.width = bmp.width;
+        if (canvas.height !== bmp.height) canvas.height = bmp.height;
+        ctx.drawImage(bmp, 0, 0);
+        bmp.close();
+        if (!studentConnectedRef.current) {
+          studentConnectedRef.current = true;
+          setStudentConnected(true);
+        }
+      }).catch(function() {
+        // Fallback to Image element
+        var img = new window.Image();
+        img.onload = function() {
+          try {
+            var ctx = canvas.getContext('2d');
+            if (canvas.width !== img.width) canvas.width = img.width;
+            if (canvas.height !== img.height) canvas.height = img.height;
+            ctx.drawImage(img, 0, 0);
+            if (!studentConnectedRef.current) { studentConnectedRef.current = true; setStudentConnected(true); }
+          } catch(e) {}
+        };
+        img.src = data.frame;
+      });
     });
 
     var remAudioCtx = null;
@@ -404,38 +423,44 @@ export default function VivaRoom() {
   function startAdminVideo(sock) {
     clearInterval(frameIntervalRef.current);
     var cap = document.createElement('canvas');
-    cap.width = 320; cap.height = 240;
+    cap.width = 640; cap.height = 480;
     var ctx = cap.getContext('2d');
     var track = streamRef.current && streamRef.current.getVideoTracks()[0];
+    var ic = (track && window.ImageCapture) ? new ImageCapture(track) : null;
+    var sending = false;
     var sent = 0;
 
     function sendFrame() {
       if (!sock.connected || !streamRef.current) return;
-      // ImageCapture is the most reliable way to grab frames
-      if (track && window.ImageCapture) {
-        try {
-          new ImageCapture(track).grabFrame().then(function(bmp) {
-            ctx.drawImage(bmp, 0, 0, 320, 240);
-            sock.volatile.emit('video-frame', cap.toDataURL('image/jpeg', 0.4));
-            sent++;
-          }).catch(function() { fallback(); });
-        } catch(e) { fallback(); }
-      } else { fallback(); }
-    }
+      if (sending) return; // don't pile up
+      sending = true;
 
-    function fallback() {
-      var v = videoRef.current;
-      if (v && v.readyState >= 2 && v.videoWidth > 0) {
+      function doSend(src) {
         try {
-          ctx.drawImage(v, 0, 0, 320, 240);
-          sock.volatile.emit('video-frame', cap.toDataURL('image/jpeg', 0.4));
+          ctx.drawImage(src, 0, 0, cap.width, cap.height);
+          sock.volatile.emit('video-frame', cap.toDataURL('image/jpeg', 0.5));
           sent++;
         } catch(e) {}
+        sending = false;
+      }
+
+      if (ic) {
+        ic.grabFrame().then(doSend).catch(function() {
+          ic = null; // fallback forever
+          var v = videoRef.current;
+          if (v && v.readyState >= 2 && v.videoWidth > 0) doSend(v);
+          else sending = false;
+        });
+      } else {
+        var v = videoRef.current;
+        if (v && v.readyState >= 2 && v.videoWidth > 0) doSend(v);
+        else sending = false;
       }
     }
 
-    frameIntervalRef.current = setInterval(sendFrame, 200);
-    setTimeout(function() { console.log('[Admin] Frames sent so far:', sent); }, 2000);
+    // 15fps
+    frameIntervalRef.current = setInterval(sendFrame, 66);
+    setTimeout(function() { console.log('[Admin] Frames sent:', sent); }, 3000);
   }
 
   function startAdminAudio(sock) {
@@ -1123,15 +1148,18 @@ export default function VivaRoom() {
           : <button className="btn btn-sm btn-outline" style={{ fontSize: '0.72rem' }} onClick={function() { loadStudents(); }}>Load Students</button>}
         {selStudentName && <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#a78bfa' }}>{selStudentName}</span>}
       </div>
-        <div className="card" style={{ marginBottom: 10, maxHeight: 140, overflowY: 'auto' }}>
-          <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#9ca3af', letterSpacing: 1, marginBottom: 6, fontFamily: 'JetBrains Mono,monospace' }}>STUDENT ACTIVITY</div>
-          {alerts.length === 0 ? <div style={{ fontSize: '0.78rem', color: '#6b7280', textAlign: 'center' }}>No alerts</div>
-            : alerts.map(function(a, i) {
+
+      {/* Student Activity — always visible */}
+      <div className="card" style={{ marginBottom: 10, maxHeight: 160, overflowY: 'auto' }}>
+        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#9ca3af', letterSpacing: 1, marginBottom: 6, fontFamily: 'JetBrains Mono,monospace' }}>STUDENT ACTIVITY</div>
+        {alerts.length === 0
+          ? <div style={{ fontSize: '0.78rem', color: '#6b7280', textAlign: 'center', padding: '4px 0' }}>No alerts</div>
+          : alerts.map(function(a, idx2) {
               var col = a.type === 'urgent' ? '#dc2626' : a.type === 'success' ? '#16a34a' : '#d97706';
-              return <div key={i} style={{ padding: '4px 8px', borderLeft: '3px solid ' + col, marginBottom: 2, fontSize: '0.74rem' }}><span style={{ fontWeight: 700, color: col }}>{a.title}</span></div>;
-            })}
-        </div>
-      )}
+              return <div key={idx2} style={{ padding: '4px 8px', borderLeft: '3px solid ' + col, marginBottom: 2, fontSize: '0.74rem' }}><span style={{ fontWeight: 700, color: col }}>{a.title}</span></div>;
+            })
+        }
+      </div>
 
       {showInvite && (
         <div className="card" style={{ marginBottom: 10 }}>

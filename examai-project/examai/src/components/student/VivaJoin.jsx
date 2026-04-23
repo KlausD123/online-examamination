@@ -208,20 +208,28 @@ export default function VivaJoin() {
       if (data.role !== 'admin') return;
       var canvas = remoteCanvas.current;
       if (!canvas) return;
-      var img = new window.Image();
-      img.onload = function() {
-        try {
-          var ctx = canvas.getContext('2d');
-          canvas.width = img.width || 320;
-          canvas.height = img.height || 240;
-          ctx.drawImage(img, 0, 0);
-          if (!adminConnectedRef.current) {
-            adminConnectedRef.current = true;
-            setPeerConnected(true);
-          }
-        } catch(e) {}
-      };
-      img.src = data.frame;
+      fetch(data.frame).then(function(r) { return r.blob(); }).then(function(blob) {
+        return window.createImageBitmap(blob);
+      }).then(function(bmp) {
+        var ctx = canvas.getContext('2d');
+        if (canvas.width !== bmp.width) canvas.width = bmp.width;
+        if (canvas.height !== bmp.height) canvas.height = bmp.height;
+        ctx.drawImage(bmp, 0, 0);
+        bmp.close();
+        if (!adminConnectedRef.current) { adminConnectedRef.current = true; setPeerConnected(true); }
+      }).catch(function() {
+        var img = new window.Image();
+        img.onload = function() {
+          try {
+            var ctx = canvas.getContext('2d');
+            if (canvas.width !== img.width) canvas.width = img.width;
+            if (canvas.height !== img.height) canvas.height = img.height;
+            ctx.drawImage(img, 0, 0);
+            if (!adminConnectedRef.current) { adminConnectedRef.current = true; setPeerConnected(true); }
+          } catch(e) {}
+        };
+        img.src = data.frame;
+      });
     });
 
     var remAudioCtx = null;
@@ -244,40 +252,43 @@ export default function VivaJoin() {
   function startVideo(sock) {
     clearInterval(frameTimer.current);
     var cap = document.createElement('canvas');
-    cap.width = 320; cap.height = 240;
+    cap.width = 640; cap.height = 480;
     var ctx = cap.getContext('2d');
     var track = streamRef.current && streamRef.current.getVideoTracks()[0];
+    var ic = (track && window.ImageCapture) ? new ImageCapture(track) : null;
+    var sending = false;
     var sent = 0;
 
     function sendFrame() {
       if (!sock.connected || !streamRef.current) return;
-      // Try ImageCapture first (most reliable)
-      if (track && window.ImageCapture) {
-        try {
-          var ic = new ImageCapture(track);
-          ic.grabFrame().then(function(bmp) {
-            ctx.drawImage(bmp, 0, 0, 320, 240);
-            sock.volatile.emit('video-frame', cap.toDataURL('image/jpeg', 0.4));
-            sent++;
-          }).catch(function() { fallback(); });
-        } catch(e) { fallback(); }
-      } else { fallback(); }
-    }
+      if (sending) return;
+      sending = true;
 
-    function fallback() {
-      var v = selfVidRef.current;
-      if (v && v.readyState >= 2 && v.videoWidth > 0) {
+      function doSend(src) {
         try {
-          ctx.drawImage(v, 0, 0, 320, 240);
-          sock.volatile.emit('video-frame', cap.toDataURL('image/jpeg', 0.4));
+          ctx.drawImage(src, 0, 0, cap.width, cap.height);
+          sock.volatile.emit('video-frame', cap.toDataURL('image/jpeg', 0.5));
           sent++;
         } catch(e) {}
+        sending = false;
+      }
+
+      if (ic) {
+        ic.grabFrame().then(doSend).catch(function() {
+          ic = null;
+          var v = selfVidRef.current;
+          if (v && v.readyState >= 2 && v.videoWidth > 0) doSend(v);
+          else sending = false;
+        });
+      } else {
+        var v = selfVidRef.current;
+        if (v && v.readyState >= 2 && v.videoWidth > 0) doSend(v);
+        else sending = false;
       }
     }
 
-    frameTimer.current = setInterval(sendFrame, 200);
-    // Log after 2s to confirm frames are going out
-    setTimeout(function() { console.log('[Student] Frames sent so far:', sent); }, 2000);
+    frameTimer.current = setInterval(sendFrame, 66); // 15fps
+    setTimeout(function() { console.log('[Student] Frames sent:', sent); }, 3000);
   }
 
   function startAudio(sock) {
