@@ -348,19 +348,31 @@ export default function VivaRoom() {
       createAndSendOffer(sock, data.studentId);
     });
 
-    // Receive answer from student
+    // Buffer ICE candidates that arrive before remoteDescription is set
+    var pendingIce = [];
+    var remoteSet = false;
+
     sock.on('answer', async function(data) {
       console.log('[Admin] Received answer from student');
       if (!pcRef.current) return;
       try {
         await pcRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
-        console.log('[Admin] Remote description set OK');
+        remoteSet = true;
+        console.log('[Admin] Remote desc set, draining', pendingIce.length, 'buffered candidates');
+        for (var c of pendingIce) {
+          try { await pcRef.current.addIceCandidate(new RTCIceCandidate(c)); } catch(e) {}
+        }
+        pendingIce = [];
       } catch(e) { console.error('[Admin] setRemoteDescription failed:', e); }
     });
 
-    // Receive ICE from student
     sock.on('ice', async function(data) {
-      if (pcRef.current && data.candidate) {
+      if (!data.candidate) return;
+      if (!remoteSet) {
+        pendingIce.push(data.candidate);
+        return;
+      }
+      if (pcRef.current) {
         try { await pcRef.current.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch(e) {}
       }
     });
@@ -428,15 +440,19 @@ export default function VivaRoom() {
     };
 
     p.oniceconnectionstatechange = function() {
-      console.log('[Admin] ICE state:', p.iceConnectionState);
+      console.log('[Admin] ICE state:', p.iceConnectionState, '| Connection:', p.connectionState);
       if (p.iceConnectionState === 'connected' || p.iceConnectionState === 'completed') {
         setStudentConnected(true);
-        console.log('[Admin] WebRTC CONNECTED!');
+        console.log('[Admin] ✅ WebRTC CONNECTED — live video active!');
       }
       if (p.iceConnectionState === 'failed') {
-        console.warn('[Admin] ICE failed, restarting...');
+        console.warn('[Admin] ❌ ICE failed — trying restart');
         try { p.restartIce(); } catch(er) {}
       }
+    };
+
+    p.onicegatheringstatechange = function() {
+      console.log('[Admin] ICE gathering:', p.iceGatheringState);
     };
 
     p.onconnectionstatechange = function() {

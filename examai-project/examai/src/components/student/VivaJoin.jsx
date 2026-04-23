@@ -169,12 +169,22 @@ export default function VivaJoin() {
       createPeer(s);
     });
 
-    // Receive offer from admin
+    // Buffer ICE candidates before offer/remoteDescription is set
+    var pendingIce = [];
+    var remoteSet = false;
+
     s.on('offer', async function(data) {
       console.log('[Student] Received offer from admin');
       if (!pc.current) createPeer(s);
       try {
         await pc.current.setRemoteDescription(new RTCSessionDescription(data.offer));
+        remoteSet = true;
+        // Drain buffered ICE candidates
+        console.log('[Student] Remote desc set, draining', pendingIce.length, 'buffered candidates');
+        for (var c of pendingIce) {
+          try { await pc.current.addIceCandidate(new RTCIceCandidate(c)); } catch(e) {}
+        }
+        pendingIce = [];
         var answer = await pc.current.createAnswer();
         await pc.current.setLocalDescription(answer);
         s.emit('answer', { to: data.from, answer: pc.current.localDescription });
@@ -182,9 +192,13 @@ export default function VivaJoin() {
       } catch(e) { console.error('[Student] answer failed:', e); }
     });
 
-    // Receive ICE from admin
     s.on('ice', async function(data) {
-      if (pc.current && data.candidate) {
+      if (!data.candidate) return;
+      if (!remoteSet) {
+        pendingIce.push(data.candidate);
+        return;
+      }
+      if (pc.current) {
         try { await pc.current.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch(e) {}
       }
     });
@@ -227,14 +241,25 @@ export default function VivaJoin() {
     };
 
     p.oniceconnectionstatechange = function() {
-      console.log('[Student] ICE:', p.iceConnectionState);
-      if (p.iceConnectionState === 'connected' || p.iceConnectionState === 'completed') setStatus('connected');
-      if (p.iceConnectionState === 'failed') { setStatus('failed'); try { p.restartIce(); } catch(er){} }
+      console.log('[Student] ICE:', p.iceConnectionState, '| Connection:', p.connectionState);
+      if (p.iceConnectionState === 'connected' || p.iceConnectionState === 'completed') {
+        setStatus('connected');
+        console.log('[Student] ✅ WebRTC CONNECTED — live video active!');
+      }
+      if (p.iceConnectionState === 'failed') {
+        setStatus('failed');
+        console.warn('[Student] ❌ ICE failed — restarting');
+        try { p.restartIce(); } catch(er) {}
+      }
       if (p.iceConnectionState === 'disconnected') setStatus('waiting');
     };
 
+    p.onicegatheringstatechange = function() {
+      console.log('[Student] ICE gathering:', p.iceGatheringState);
+    };
+
     p.onconnectionstatechange = function() {
-      console.log('[Student] Peer:', p.connectionState);
+      console.log('[Student] Connection state:', p.connectionState);
     };
   }
 
