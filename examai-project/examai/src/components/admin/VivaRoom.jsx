@@ -3,6 +3,7 @@ import { useStore } from '../../store/useStore';
 import { groqChat } from '../../utils/aiService';
 import { apiPost, apiGet } from '../../utils/api';
 import { io as ioClient } from 'socket.io-client';
+import JitsiMeet from '../JitsiMeet';
 
 var SOCKET_URL = 'http://localhost:5000';
 
@@ -305,64 +306,62 @@ export default function VivaRoom() {
     }, 200);
   }
 
-  // ── WebRTC signaling — same pattern as shared VivaRoom component ─────────────
-  // ── WebRTC — admin side ─────────────────────────────────────────────────────
-  var pcRef  = useRef(null);
+  // ── WebRTC ────────────────────────────────────────────────────────────────
+  var pcRef             = useRef(null);
+  var sockVivaRef       = useRef(null); // the vivaId used for socket
   var frameIntervalRef  = useRef(null);
   var audioProcessorRef = useRef(null);
 
   function setupWebRTC() {
     var vivaId = savedVivaRef.current ? savedVivaRef.current.viva_id : null;
-    if (!vivaId) return;
-    if (socketRef.current) { socketRef.current.disconnect(); socketRef.current = null; }
-    if (pcRef.current) { pcRef.current.close(); pcRef.current = null; }
+    if (!vivaId) { console.error('[Admin] setupWebRTC: no vivaId'); return; }
+    sockVivaRef.current = vivaId;
 
-    // Get camera
+    // Close any existing
+    if (socketRef.current) { try{socketRef.current.disconnect();}catch(e){} socketRef.current = null; }
+    if (pcRef.current) { try{pcRef.current.close();}catch(e){} pcRef.current = null; }
+
+    // Step 1: get camera
     navigator.mediaDevices.getUserMedia({ video: true, audio: true })
       .then(function(stream) {
         streamRef.current = stream;
-        console.log('[Admin] got stream:', stream.getTracks().map(function(t){return t.kind;}));
-
-        // Attach self-view
-        var a = 0;
-        var t = setInterval(function() {
-          if (++a > 50) { clearInterval(t); return; }
-          if (!videoRef.current) return;
-          clearInterval(t);
-          videoRef.current.srcObject = stream;
-          videoRef.current.muted = true;
+        console.log('[Admin] camera OK tracks:', stream.getTracks().length);
+        // attach self-view
+        var a=0, iv=setInterval(function(){
+          if(++a>50){clearInterval(iv);return;}
+          if(!videoRef.current)return;
+          clearInterval(iv);
+          videoRef.current.srcObject=stream;
+          videoRef.current.muted=true;
           videoRef.current.play().catch(function(){});
           setCamReady(true); setFaceStatus('loading'); startFaceDetection();
-        }, 100);
-
-        // Connect socket
-        connectSocket(vivaId, stream);
+        },100);
+        // Step 2: connect socket
+        doConnectSocket(vivaId, stream);
       })
       .catch(function(e) {
         console.warn('[Admin] camera failed:', e.name);
         setFaceStatus('unavailable'); setPermBlocked(true);
-        // Still join room without camera
-        connectSocket(vivaId, null);
+        doConnectSocket(vivaId, null);
       });
   }
 
-  function connectSocket(vivaId, stream) {
+  function doConnectSocket(vivaId, stream) {
     var sock = ioClient(SOCKET_URL);
     socketRef.current = sock;
 
     sock.on('connect', function() {
-      console.log('[Admin] socket connected:', sock.id);
+      console.log('[Admin] socket OK:', sock.id, 'room:', vivaId);
       sock.emit('join-viva-room', { vivaId: vivaId, role: 'admin', userName: 'Examiner' });
     });
+    sock.on('connect_error', function(e) { console.error('[Admin] socket error:', e.message); });
 
     sock.on('room-members', function(members) {
-      console.log('[Admin] room-members:', members.length);
+      console.log('[Admin] room-members:', JSON.stringify(members));
       members.forEach(function(m) {
         if (m.role === 'student') {
-          console.log('[Admin] student already in room:', m.userName);
           setStudentConnected(true);
-          store.addToast((m.userName||'Student') + ' in room — press 📷 Start Cam', 'success');
-          // Do NOT offer yet — wait for student camera
+          store.addToast((m.userName||'Student') + ' in room — click 📷 Start Cam', 'success');
         }
       });
     });
@@ -371,24 +370,20 @@ export default function VivaRoom() {
       console.log('[Admin] peer-joined:', data.role, data.userName);
       if (data.role === 'student') {
         setStudentConnected(true);
-        store.addToast((data.userName||'Student') + ' joined — press 📷 Start Cam', 'success');
+        store.addToast((data.userName||'Student') + ' joined — click 📷 Start Cam', 'success');
       }
     });
 
-    // Student camera started → NOW create fresh peer and send offer
+    // ★ KEY: only create WebRTC peer AFTER student has camera
     sock.on('student-camera-ready', function(data) {
-      console.log('[Admin] ✅ student camera ready — sending offer now');
-      store.addToast('Student camera ready — starting video…', 'success');
-      if (stream) {
-        makeOffer(sock, vivaId, stream);
-      } else {
-        console.warn('[Admin] student camera ready but admin has no stream!');
-      }
+      console.log('[Admin] student-camera-ready! stream:', !!stream);
+      store.addToast('Student camera ON — connecting video…', 'success');
+      if (!stream) { console.error('[Admin] no admin stream!'); return; }
+      doMakeOffer(sock, vivaId, stream);
     });
-
 
     sock.on('webrtc-answer', function(data) {
-      console.log('[Admin] got answer');
+      console.log('[Admin] got answer, sigState:', pcRef.current && pcRef.current.signalingState);
       if (pcRef.current && pcRef.current.signalingState !== 'closed') {
         pcRef.current.setRemoteDescription(new RTCSessionDescription(data.answer))
           .then(function(){ console.log('[Admin] remote desc set OK'); })
@@ -398,79 +393,67 @@ export default function VivaRoom() {
 
     sock.on('webrtc-ice-candidate', function(data) {
       if (pcRef.current && data.candidate) {
-        pcRef.current.addIceCandidate(new RTCIceCandidate(data.candidate))
-          .catch(function(e){ console.warn('[Admin] ice err:', e.message); });
+        pcRef.current.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(function(){});
       }
     });
 
     sock.on('peer-left', function(data) {
       if (data.role === 'student') {
-        console.log('[Admin] student left');
         setStudentConnected(false);
         if (studentVidRef.current) studentVidRef.current.srcObject = null;
-        if (pcRef.current) { pcRef.current.close(); pcRef.current = null; }
+        if (pcRef.current) { try{pcRef.current.close();}catch(e){} pcRef.current = null; }
       }
     });
-
-    sock.on('connect_error', function(e) { console.error('[Admin] socket error:', e.message); });
   }
 
-  function makeOffer(sock, vivaId, stream) {
-    if (pcRef.current) { pcRef.current.close(); pcRef.current = null; }
-
-    var p = new RTCPeerConnection({ iceServers: [
+  function doMakeOffer(sock, vivaId, stream) {
+    if (pcRef.current) { try{pcRef.current.close();}catch(e){} pcRef.current = null; }
+    var pc = new RTCPeerConnection({ iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' }
     ]});
-    pcRef.current = p;
+    pcRef.current = pc;
 
-    // Add local tracks
-    stream.getTracks().forEach(function(track) {
-      p.addTrack(track, stream);
-      console.log('[Admin] addTrack:', track.kind, track.readyState);
+    stream.getTracks().forEach(function(t) {
+      pc.addTrack(t, stream);
+      console.log('[Admin] addTrack:', t.kind, t.readyState, t.enabled);
     });
 
-    // Receive student stream
-    p.ontrack = function(ev) {
-      console.log('[Admin] got student track:', ev.track.kind, 'streams:', ev.streams.length);
-      if (!ev.streams || !ev.streams[0]) return;
+    pc.ontrack = function(ev) {
+      console.log('[Admin] ontrack:', ev.track.kind, 'streams:', ev.streams.length);
+      if (!ev.streams || !ev.streams[0]) { console.warn('[Admin] no stream in ontrack!'); return; }
       var rs = ev.streams[0];
       setStudentConnected(true);
-      var tries = 0;
-      var t = setInterval(function() {
-        tries++;
-        if (tries > 100) { clearInterval(t); console.warn('[Admin] studentVidRef never mounted'); return; }
-        if (!studentVidRef.current) return;
-        clearInterval(t);
+      var tries=0, iv=setInterval(function(){
+        if(++tries>100){clearInterval(iv);console.warn('[Admin] studentVidRef never appeared');return;}
+        if(!studentVidRef.current)return;
+        clearInterval(iv);
         studentVidRef.current.srcObject = rs;
         studentVidRef.current.play().catch(function(){});
-        console.log('[Admin] ✅ student video attached!');
+        console.log('[Admin] ✅ student video live!');
       }, 50);
     };
 
-    p.onicecandidate = function(ev) {
+    pc.onicecandidate = function(ev) {
       if (ev.candidate) sock.emit('webrtc-ice-candidate', { vivaId: vivaId, candidate: ev.candidate });
     };
-
-    p.onconnectionstatechange = function() {
-      console.log('[Admin] conn state:', p.connectionState);
-      if (p.connectionState === 'connected') { setStudentConnected(true); console.log('[Admin] ✅ CONNECTED!'); }
-      if (p.connectionState === 'failed') { setStudentConnected(false); }
+    pc.onconnectionstatechange = function() {
+      console.log('[Admin] connState:', pc.connectionState);
+      if (pc.connectionState === 'connected') setStudentConnected(true);
     };
+    pc.oniceconnectionstatechange = function() { console.log('[Admin] ICE:', pc.iceConnectionState); };
 
-    p.oniceconnectionstatechange = function() { console.log('[Admin] ICE:', p.iceConnectionState); };
-
-    p.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true })
-      .then(function(offer) { return p.setLocalDescription(offer); })
+    pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true })
+      .then(function(o) { return pc.setLocalDescription(o); })
       .then(function() {
-        sock.emit('webrtc-offer', { vivaId: vivaId, offer: p.localDescription });
-        console.log('[Admin] ✅ offer sent to student');
+        sock.emit('webrtc-offer', { vivaId: vivaId, offer: pc.localDescription });
+        console.log('[Admin] ✅ offer sent!');
       })
       .catch(function(e) { console.error('[Admin] createOffer failed:', e); });
   }
 
   function stopFrameRelay() {
-    if (pcRef.current) { pcRef.current.close(); pcRef.current = null; }
+    if (pcRef.current) { try{pcRef.current.close();}catch(e){} pcRef.current = null; }
   }
   async function createOfferForStudent() {}
 
@@ -1170,58 +1153,17 @@ export default function VivaRoom() {
       {/* 3-column layout */}
       <div className="viva-3col">
 
-        {/* LEFT: cameras + question tools */}
+        {/* LEFT: Jitsi video + question tools */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, overflow: 'auto' }}>
-          <div className="card" style={{ padding: 10 }}>
-            <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#9ca3af', letterSpacing: 1, marginBottom: 5, textAlign: 'center', fontFamily: 'JetBrains Mono,monospace' }}>📹 YOUR CAMERA</div>
-            <div style={{ position: 'relative', borderRadius: 7, overflow: 'hidden', background: '#000', lineHeight: 0 }}>
-              <video ref={videoRef} autoPlay muted playsInline style={{ width: '100%', height: 130, objectFit: 'cover', display: 'block' }}/>
-              <canvas ref={canvasRef} style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}/>
-              {!camReady && (
-                <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 6 }}>
-                  {faceStatus === 'unavailable'
-                    ? <button onClick={startCamera} style={{ padding: '6px 14px', borderRadius: 7, border: 'none', background: '#7c3aed', color: '#fff', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer' }}>🔓 Grant Camera</button>
-                    : <span style={{ fontSize: '0.68rem', color: '#6b7280' }}>Starting…</span>
-                  }
-                </div>
-              )}
-            </div>
-            <div style={{ marginTop: 4, padding: '3px 8px', borderRadius: 4, background: 'rgba(255,255,255,.05)', textAlign: 'center', fontSize: '0.68rem', fontWeight: 700, color: fsColors[faceStatus] || '#9ca3af' }}>
-              {faceStatus === 'unavailable' ? '🔒 Click Grant Camera above' : (fsLabels[faceStatus] || faceStatus)}
-            </div>
-          </div>
 
-          <div className="card" style={{ padding: 10 }}>
-            <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#9ca3af', letterSpacing: 1, marginBottom: 5, textAlign: 'center', fontFamily: 'JetBrains Mono,monospace' }}>🎓 STUDENT</div>
-            <div style={{ position: 'relative', borderRadius: 7, overflow: 'hidden', background: '#111', aspectRatio: '4/3' }}>
-              <video ref={studentVidRef} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}/>
-              <div style={{ position: 'absolute', top: 4, right: 6, background: studentConnected ? 'rgba(22,163,74,.9)' : 'rgba(0,0,0,.6)', color: '#fff', fontSize: '0.6rem', padding: '2px 8px', borderRadius: 10, fontWeight: 700 }}>
-                {studentConnected ? '🟢 Live' : '⏳ Waiting'}
-              </div>
-            </div>
-            {/* Camera control buttons */}
-            <div style={{ display: 'flex', gap: 5, marginTop: 6 }}>
-              <button
-                onClick={function() {
-                  var vivaId = savedVivaRef.current ? savedVivaRef.current.viva_id : null;
-                  if (!vivaId || !socketRef.current) return;
-                  socketRef.current.emit('request-camera', { vivaId: vivaId });
-                  store.addToast('Camera request sent to student', 'success');
-                }}
-                style={{ flex: 1, padding: '5px 6px', borderRadius: 7, border: 'none', background: 'rgba(22,163,74,.2)', color: '#4ade80', fontSize: '0.65rem', fontWeight: 700, cursor: 'pointer' }}>
-                📷 Start Cam
-              </button>
-              <button
-                onClick={function() {
-                  var vivaId = savedVivaRef.current ? savedVivaRef.current.viva_id : null;
-                  if (!vivaId || !socketRef.current) return;
-                  socketRef.current.emit('stop-camera', { vivaId: vivaId });
-                }}
-                style={{ flex: 1, padding: '5px 6px', borderRadius: 7, border: 'none', background: 'rgba(220,38,38,.15)', color: '#f87171', fontSize: '0.65rem', fontWeight: 700, cursor: 'pointer' }}>
-                ⏹ Stop Cam
-              </button>
-            </div>
-            <div style={{ marginTop: 4, fontSize: '0.67rem', color: studentConnected ? '#4ade80' : '#6b7280', textAlign: 'center', fontWeight: 700 }}>{studentConnected ? '🟢 Student Connected' : '⏳ Waiting for student…'}</div>
+          {/* Jitsi Meet video call */}
+          <div className="card" style={{ padding: 8 }}>
+            <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#9ca3af', letterSpacing: 1, marginBottom: 6, textAlign: 'center', fontFamily: 'JetBrains Mono,monospace' }}>📹 LIVE VIDEO CALL</div>
+            {savedVivaRef.current
+              ? <JitsiMeet roomName={savedVivaRef.current.viva_id} displayName="Examiner" height={340} />
+              : <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6b7280', fontSize: '0.8rem' }}>Start room to begin video call</div>
+            }
+            <div style={{ marginTop: 6, fontSize: '0.7rem', color: '#6b7280', textAlign: 'center' }}>Student joins via their invite — same room automatically</div>
           </div>
 
           <div className="card" style={{ padding: 12 }}>
@@ -1541,6 +1483,7 @@ export default function VivaRoom() {
             </div>
           </div>
         </div>
+
       </div>
     </div>
   );
