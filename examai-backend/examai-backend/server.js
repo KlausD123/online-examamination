@@ -85,9 +85,13 @@ io.on('connection', (socket) => {
   socket.on('ice-candidate', ({ to, candidate }) => { if (to) io.to(to).emit('ice-candidate', { from: socket.id, candidate }); });
 
   // Video frame relay — admin sends frame, server broadcasts to all students in room; student sends frame, server sends to admin
+  var frameCounts = {};
   socket.on('video-frame', (frameData) => {
     const { viva_id, role } = socket.data;
     if (!viva_id || !rooms[viva_id]) return;
+    // Log every 50th frame to confirm relay is working
+    frameCounts[socket.id] = (frameCounts[socket.id] || 0) + 1;
+    if (frameCounts[socket.id] % 50 === 1) console.log('[RELAY] frame from', role, 'in', viva_id, 'count:', frameCounts[socket.id]);
     if (role === 'admin') {
       // Send admin frame to all students
       rooms[viva_id].students.forEach(function(sid) {

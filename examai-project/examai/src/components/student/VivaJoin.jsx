@@ -202,6 +202,8 @@ export default function VivaJoin() {
       if (data.role === 'admin') setPeerConnected(false);
     });
 
+    var adminConnectedRef = { current: false };
+
     sock.on('remote-frame', function(data) {
       if (data.role !== 'admin') return;
       var canvas = remoteCanvas.current;
@@ -210,9 +212,13 @@ export default function VivaJoin() {
       img.onload = function() {
         try {
           var ctx = canvas.getContext('2d');
-          if (canvas.width !== img.width) canvas.width = img.width;
-          if (canvas.height !== img.height) canvas.height = img.height;
+          canvas.width = img.width || 320;
+          canvas.height = img.height || 240;
           ctx.drawImage(img, 0, 0);
+          if (!adminConnectedRef.current) {
+            adminConnectedRef.current = true;
+            setPeerConnected(true);
+          }
         } catch(e) {}
       };
       img.src = data.frame;
@@ -443,17 +449,10 @@ export default function VivaJoin() {
         {/* Examiner video (canvas) */}
         <div className="card" style={{ padding: 12 }}>
           <div style={{ position: 'relative', borderRadius: 8, overflow: 'hidden', background: '#111', lineHeight: 0 }}>
-            <canvas ref={remoteCanvas} style={{ width: '100%', height: 220, objectFit: 'cover', display: 'block', background: '#111' }}/>
-            {!peerConnected && (
-              <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 8 }}>
-                <div style={{ fontSize: '2.8rem', opacity: .25 }}>👨‍🏫</div>
-                <div style={{ fontSize: '0.75rem', color: '#4b5563', fontWeight: 600 }}>Waiting for examiner…</div>
-                <button onClick={function() { connectSocket(); }} style={{ padding: '4px 12px', borderRadius: 6, border: 'none', background: 'rgba(124,58,237,.4)', color: '#a78bfa', fontSize: '0.65rem', fontWeight: 700, cursor: 'pointer', marginTop: 4 }}>🔄 Reconnect</button>
-              </div>
-            )}
-            {peerConnected && (
-              <div style={{ position: 'absolute', bottom: 6, left: '50%', transform: 'translateX(-50%)', background: 'rgba(22,163,74,.88)', color: '#fff', fontSize: '0.65rem', padding: '3px 12px', borderRadius: 12, whiteSpace: 'nowrap', fontWeight: 700 }}>🟢 Examiner Live</div>
-            )}
+            <canvas ref={remoteCanvas} width={320} height={240} style={{ width: '100%', height: 220, display: 'block', background: '#111' }}/>
+            <div style={{ position: 'absolute', top: 4, right: 8, background: peerConnected ? 'rgba(22,163,74,.85)' : 'rgba(0,0,0,.6)', color: '#fff', fontSize: '0.65rem', padding: '3px 10px', borderRadius: 12, fontWeight: 700 }}>
+              {peerConnected ? '🟢 Live' : '⏳ Waiting'}
+            </div>
           </div>
           <div style={{ textAlign: 'center', marginTop: 10, fontSize: '0.8rem', color: peerConnected ? '#4ade80' : '#6b7280', fontWeight: 600 }}>
             {peerConnected ? '🟢 Examiner connected — speak clearly' : '⏳ Connecting to examiner…'}

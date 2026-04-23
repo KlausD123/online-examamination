@@ -363,6 +363,8 @@ export default function VivaRoom() {
       }
     });
 
+    var studentConnectedRef = { current: false }; // local ref to avoid stale closure
+
     sock.on('remote-frame', function(data) {
       if (data.role !== 'student') return;
       var canvas = studentVidRef.current;
@@ -371,10 +373,13 @@ export default function VivaRoom() {
       img.onload = function() {
         try {
           var ctx = canvas.getContext('2d');
-          if (canvas.width !== img.width) canvas.width = img.width;
-          if (canvas.height !== img.height) canvas.height = img.height;
+          canvas.width = img.width || 320;
+          canvas.height = img.height || 240;
           ctx.drawImage(img, 0, 0);
-          if (!studentConnected) setStudentConnected(true);
+          if (!studentConnectedRef.current) {
+            studentConnectedRef.current = true;
+            setStudentConnected(true);
+          }
         } catch(e) {}
       };
       img.src = data.frame;
@@ -1180,22 +1185,10 @@ export default function VivaRoom() {
           <div className="card" style={{ padding: 10 }}>
             <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#9ca3af', letterSpacing: 1, marginBottom: 5, textAlign: 'center', fontFamily: 'JetBrains Mono,monospace' }}>🎓 STUDENT</div>
             <div style={{ position: 'relative', borderRadius: 7, overflow: 'hidden', background: '#111', lineHeight: 0 }}>
-              <canvas ref={studentVidRef} style={{ width: '100%', height: 130, objectFit: 'cover', display: 'block', background: '#111' }}/>
-              {!studentConnected && (
-                <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 4 }}>
-                  <span style={{ fontSize: '1.5rem', opacity: .3 }}>👤</span>
-                  <span style={{ fontSize: '0.65rem', color: '#4b5563' }}>Waiting…</span>
-                  <button onClick={function() {
-                    var room = savedVivaRef.current;
-                    if (!room || !socketRef.current) return;
-                    var vivaId = room.viva_id;
-                    socketRef.current.emit('join-room', { viva_id: vivaId, role: 'admin', name: 'Examiner' });
-                  }} style={{ padding: '3px 8px', borderRadius: 5, border: 'none', background: 'rgba(124,58,237,.35)', color: '#a78bfa', fontSize: '0.6rem', fontWeight: 700, cursor: 'pointer', marginTop: 2 }}>
-                    🔄 Re-connect
-                  </button>
-                </div>
-              )}
-              {studentConnected && <div style={{ position: 'absolute', bottom: 4, left: '50%', transform: 'translateX(-50%)', background: 'rgba(22,163,74,.9)', color: '#fff', fontSize: '0.6rem', padding: '2px 8px', borderRadius: 10, fontWeight: 700, whiteSpace: 'nowrap' }}>🟢 Live</div>}
+              <canvas ref={studentVidRef} width={320} height={240} style={{ width: '100%', height: 130, display: 'block', background: '#111' }}/>
+              <div style={{ position: 'absolute', top: 4, right: 6, background: studentConnected ? 'rgba(22,163,74,.85)' : 'rgba(0,0,0,.6)', color: '#fff', fontSize: '0.6rem', padding: '2px 7px', borderRadius: 10, fontWeight: 700 }}>
+                {studentConnected ? '🟢 Live' : '⏳ Waiting'}
+              </div>
             </div>
             <div style={{ marginTop: 4, fontSize: '0.67rem', color: studentConnected ? '#4ade80' : '#6b7280', textAlign: 'center', fontWeight: 700 }}>{studentConnected ? '🟢 Connected' : '⏳ Waiting…'}</div>
           </div>
