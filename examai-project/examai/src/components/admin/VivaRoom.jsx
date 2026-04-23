@@ -205,6 +205,31 @@ export default function VivaRoom() {
     return function() { stopAll(); };
   }, []); // eslint-disable-line
 
+  // ── Listen for student join/left from VivaVideo socket ──────────────────
+  useEffect(function() {
+    function onJoined(e) {
+      var d = e.detail;
+      if (d.role === 'student') {
+        setStudentConnected(true);
+        store.addToast((d.userName||'Student') + ' joined the room', 'success');
+        setAlerts(function(a) { return [{ title: '🟢 ' + (d.userName||'Student') + ' joined', type: 'success', time: new Date().toLocaleTimeString() }].concat(a).slice(0,20); });
+      }
+    }
+    function onLeft(e) {
+      var d = e.detail;
+      if (d.role === 'student') {
+        setStudentConnected(false);
+        setAlerts(function(a) { return [{ title: '🔴 ' + (d.userName||'Student') + ' left', type: 'urgent', time: new Date().toLocaleTimeString() }].concat(a).slice(0,20); });
+      }
+    }
+    window.addEventListener('viva-peer-joined', onJoined);
+    window.addEventListener('viva-peer-left',   onLeft);
+    return function() {
+      window.removeEventListener('viva-peer-joined', onJoined);
+      window.removeEventListener('viva-peer-left',   onLeft);
+    };
+  }, []); // eslint-disable-line
+
   // ── Away detection ──────────────────────────────────────────────────────
   useEffect(function() {
     if (phase !== 'room') return;
@@ -315,20 +340,12 @@ export default function VivaRoom() {
   var audioProcessorRef = useRef(null);
 
   function setupWebRTC() {
-    var vivaId = savedVivaRef.current ? savedVivaRef.current.viva_id : null;
-    if (!vivaId) { console.error('[Admin] setupWebRTC: no vivaId'); return; }
-    sockVivaRef.current = vivaId;
-
-    // Close any existing
-    if (socketRef.current) { try{socketRef.current.disconnect();}catch(e){} socketRef.current = null; }
-    if (pcRef.current) { try{pcRef.current.close();}catch(e){} pcRef.current = null; }
-
-    // Step 1: get camera
-    navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+    // VivaVideo component handles camera + socket + WebRTC
+    // This function now only sets up face detection camera for the admin panel
+    setCamReady(false); setFaceStatus('loading');
+    navigator.mediaDevices.getUserMedia({ video: true, audio: false })
       .then(function(stream) {
-        streamRef.current = stream;
-        console.log('[Admin] camera OK tracks:', stream.getTracks().length);
-        // attach self-view
+        // Separate camera stream just for face detection display
         var a=0, iv=setInterval(function(){
           if(++a>50){clearInterval(iv);return;}
           if(!videoRef.current)return;
@@ -338,13 +355,10 @@ export default function VivaRoom() {
           videoRef.current.play().catch(function(){});
           setCamReady(true); setFaceStatus('loading'); startFaceDetection();
         },100);
-        // Step 2: connect socket
-        doConnectSocket(vivaId, stream);
       })
       .catch(function(e) {
-        console.warn('[Admin] camera failed:', e.name);
+        console.warn('[Admin] face cam failed:', e.name);
         setFaceStatus('unavailable'); setPermBlocked(true);
-        doConnectSocket(vivaId, null);
       });
   }
 

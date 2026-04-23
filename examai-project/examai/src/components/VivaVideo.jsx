@@ -53,7 +53,9 @@ export default function VivaVideo({ vivaId, role, displayName, onSocketReady }) 
     sockRef.current = sock;
 
     sock.on('connect', function() {
+      console.log('[VivaVideo] socket connected:', sock.id, 'room:', vivaId, 'role:', role);
       sock.emit('join-viva-room', { vivaId: vivaId, role: role, userName: displayName || role });
+      // Give admin the socket so it can emit question-text etc
       if (onSocketReady) onSocketReady(sock);
     });
 
@@ -72,8 +74,11 @@ export default function VivaVideo({ vivaId, role, displayName, onSocketReady }) 
     sock.on('peer-joined', function(data) {
       var isPeer = (role === 'admin' && data.role === 'student') || (role === 'student' && data.role === 'admin');
       if (!isPeer) return;
+      console.log('[VivaVideo] peer joined:', data.role, data.userName);
       peerIdRef.current = data.socketId;
       setConnected(true);
+      // Notify admin UI of student join/leave via custom event
+      window.dispatchEvent(new CustomEvent('viva-peer-joined', { detail: data }));
       if (role === 'admin') makeOffer(sock, stream, data.socketId);
     });
 
@@ -101,6 +106,7 @@ export default function VivaVideo({ vivaId, role, displayName, onSocketReady }) 
         setConnected(false);
         if (remoteVid.current) remoteVid.current.srcObject = null;
         if (pcRef.current) { try{pcRef.current.close();}catch(e){} pcRef.current = null; }
+        window.dispatchEvent(new CustomEvent('viva-peer-left', { detail: data }));
       }
     });
 
