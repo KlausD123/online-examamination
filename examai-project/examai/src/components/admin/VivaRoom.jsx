@@ -306,7 +306,7 @@ export default function VivaRoom() {
   }
 
   // ── WebRTC signaling — same pattern as shared VivaRoom component ─────────────
-  // ── WebRTC — admin side (working pattern) ───────────────────────────────────
+  // ── WebRTC — admin side ─────────────────────────────────────────────────────
   var frameIntervalRef  = useRef(null);
   var audioProcessorRef = useRef(null);
   var pcRef             = useRef(null);
@@ -314,13 +314,13 @@ export default function VivaRoom() {
   function setupWebRTC() {
     var vivaId = savedVivaRef.current ? savedVivaRef.current.viva_id : null;
     if (!vivaId) { console.warn('[Admin] No vivaId'); return; }
+    if (socketRef.current) { try { socketRef.current.disconnect(); } catch(e){} socketRef.current = null; }
+    if (pcRef.current) { try { pcRef.current.close(); } catch(e){} pcRef.current = null; }
 
-    if (socketRef.current) { try { socketRef.current.disconnect(); } catch(e) {} socketRef.current = null; }
-    if (pcRef.current) { try { pcRef.current.close(); } catch(e) {} pcRef.current = null; }
-
-    // Get camera + mic
     navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(function(stream) {
       streamRef.current = stream;
+      console.log('[Admin] Camera OK:', stream.getTracks().map(function(t){return t.kind;}));
+
       var att = 0;
       var iv = setInterval(function() {
         if (++att > 50) { clearInterval(iv); return; }
@@ -336,36 +336,37 @@ export default function VivaRoom() {
       socketRef.current = sock;
 
       sock.on('connect', function() {
-        console.log('[Admin] Socket connected:', sock.id);
+        console.log('[Admin] Socket connected:', sock.id, 'room:', vivaId);
         sock.emit('join-viva-room', { vivaId: vivaId, role: 'admin', userName: 'Examiner' });
       });
 
       sock.on('room-members', function(members) {
+        console.log('[Admin] Members in room:', members.length);
         members.forEach(function(m) {
           if (m.role === 'student') {
-            console.log('[Admin] Student already in room:', m.userName);
+            console.log('[Admin] Student already here:', m.userName);
             setStudentConnected(true);
-            store.addToast((m.userName || 'Student') + ' is in the room', 'success');
-            createOffer(vivaId, stream);
+            store.addToast((m.userName||'Student') + ' is in the room', 'success');
+            sendOffer(vivaId, sock, stream);
           }
         });
       });
 
       sock.on('peer-joined', function(data) {
+        console.log('[Admin] peer-joined:', data.role, data.userName);
         if (data.role === 'student') {
-          console.log('[Admin] Student joined:', data.userName);
           setStudentConnected(true);
-          store.addToast((data.userName || 'Student') + ' joined the room', 'success');
-          createOffer(vivaId, stream);
+          store.addToast((data.userName||'Student') + ' joined', 'success');
+          sendOffer(vivaId, sock, stream);
         }
       });
 
       sock.on('webrtc-answer', function(data) {
-        console.log('[Admin] Received answer from student');
+        console.log('[Admin] Got answer from student');
         if (pcRef.current && pcRef.current.signalingState !== 'closed') {
           pcRef.current.setRemoteDescription(new RTCSessionDescription(data.answer))
-            .then(function() { console.log('[Admin] Remote desc set OK'); })
-            .catch(function(e) { console.error('[Admin] setRemote failed:', e); });
+            .then(function(){ console.log('[Admin] Remote desc set OK'); })
+            .catch(function(e){ console.error('[Admin] setRemote failed:', e); });
         }
       });
 
@@ -379,7 +380,7 @@ export default function VivaRoom() {
         if (data.role === 'student') {
           setStudentConnected(false);
           if (studentVidRef.current) studentVidRef.current.srcObject = null;
-          if (pcRef.current) { try { pcRef.current.close(); } catch(e) {} pcRef.current = null; }
+          if (pcRef.current) { try { pcRef.current.close(); } catch(e){} pcRef.current = null; }
         }
       });
 
@@ -391,60 +392,61 @@ export default function VivaRoom() {
       var sock = ioClient(SOCKET_URL);
       socketRef.current = sock;
       sock.on('connect', function() { sock.emit('join-viva-room', { vivaId: vivaId, role: 'admin', userName: 'Examiner' }); });
+      sock.on('peer-joined', function(data) {
+        if (data.role === 'student') { setStudentConnected(true); store.addToast((data.userName||'Student') + ' joined', 'warning'); }
+      });
     });
   }
 
-  function createOffer(vivaId, stream) {
-    if (pcRef.current) { try { pcRef.current.close(); } catch(e) {} }
+  function sendOffer(vivaId, sock, stream) {
+    if (pcRef.current) { try { pcRef.current.close(); } catch(e){} pcRef.current = null; }
     var pc = new RTCPeerConnection(ICE_SERVERS);
     pcRef.current = pc;
 
     stream.getTracks().forEach(function(track) {
-      console.log('[Admin] Adding track:', track.kind);
       pc.addTrack(track, stream);
+      console.log('[Admin] Track added:', track.kind);
     });
 
     pc.ontrack = function(event) {
       console.log('[Admin] Student track received:', event.track.kind);
-      if (event.streams && event.streams[0]) {
-        var att = 0;
-        var iv = setInterval(function() {
-          if (++att > 50) { clearInterval(iv); return; }
-          if (!studentVidRef.current) return;
-          clearInterval(iv);
-          studentVidRef.current.srcObject = event.streams[0];
-          studentVidRef.current.play().catch(function(){});
-          setStudentConnected(true);
-          console.log('[Admin] ✅ Student video LIVE!');
-        }, 100);
-      }
+      if (!event.streams || !event.streams[0]) return;
+      var rs = event.streams[0];
+      var att = 0;
+      var iv = setInterval(function() {
+        if (++att > 50) { clearInterval(iv); return; }
+        if (!studentVidRef.current) return;
+        clearInterval(iv);
+        studentVidRef.current.srcObject = rs;
+        studentVidRef.current.play().catch(function(){});
+        setStudentConnected(true);
+        console.log('[Admin] ✅ Student video LIVE!');
+      }, 100);
     };
 
     pc.onicecandidate = function(event) {
-      if (event.candidate && socketRef.current) {
-        socketRef.current.emit('webrtc-ice-candidate', { vivaId: vivaId, candidate: event.candidate });
-      }
+      if (event.candidate) sock.emit('webrtc-ice-candidate', { vivaId: vivaId, candidate: event.candidate });
+      else console.log('[Admin] ICE gathering done');
     };
 
     pc.onconnectionstatechange = function() {
-      console.log('[Admin] Peer state:', pc.connectionState);
-      if (pc.connectionState === 'connected') { setStudentConnected(true); console.log('[Admin] ✅ WebRTC CONNECTED!'); }
-      if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') setStudentConnected(false);
+      console.log('[Admin] State:', pc.connectionState);
+      if (pc.connectionState === 'connected') { setStudentConnected(true); console.log('[Admin] ✅ CONNECTED!'); }
+      if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') setStudentConnected(false);
     };
+
+    pc.oniceconnectionstatechange = function() { console.log('[Admin] ICE:', pc.iceConnectionState); };
 
     pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true })
       .then(function(offer) { return pc.setLocalDescription(offer); })
       .then(function() {
-        console.log('[Admin] Offer sent to student');
-        socketRef.current.emit('webrtc-offer', { vivaId: vivaId, offer: pc.localDescription });
+        sock.emit('webrtc-offer', { vivaId: vivaId, offer: pc.localDescription });
+        console.log('[Admin] ✅ Offer sent!');
       })
       .catch(function(e) { console.error('[Admin] createOffer failed:', e); });
   }
 
-  function stopFrameRelay() {
-    if (pcRef.current) { try { pcRef.current.close(); } catch(e) {} pcRef.current = null; }
-  }
-
+  function stopFrameRelay() { if (pcRef.current) { try { pcRef.current.close(); } catch(e){} pcRef.current = null; } }
   async function createOfferForStudent() {}
 
   async function startFaceDetection() {

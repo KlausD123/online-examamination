@@ -161,57 +161,64 @@ export default function VivaJoin() {
     startSignaling(roomIdRef.current);
   }
 
-  // ── WebRTC signaling — mirrors the shared VivaRoom component exactly ────────
+  // ── WebRTC Signaling ─────────────────────────────────────────────────────────
   function startSignaling(vivaId) {
     if (socketRef.current) { try { socketRef.current.disconnect(); } catch(e){} }
+    if (pcRef.current) { try { pcRef.current.close(); } catch(e){} pcRef.current = null; }
 
     var socket = io('http://localhost:5000');
     socketRef.current = socket;
 
     socket.on('connect', function() {
       var name = localStorage.getItem('examai_user_name') || store.currentUser.name || 'Student';
-      console.log('[Student] Connected, joining room', vivaId);
+      console.log('[Student] Socket connected:', socket.id, '| Room:', vivaId);
       socket.emit('join-viva-room', { vivaId: vivaId, role: 'student', userName: name });
     });
 
-    // Admin is already in room — create peer connection and wait for their offer
     socket.on('room-members', function(members) {
+      console.log('[Student] Room members:', members);
+      // Admin is already here — peer is ready, admin will send offer
       members.forEach(function(m) {
         if (m.role === 'admin') {
-          console.log('[Student] Admin already in room, creating peer');
+          console.log('[Student] Admin already in room — peer ready, waiting for offer');
           setPeerStatus('connected');
-          createPeerConnection(vivaId, socket);
+          // Create peer NOW so we're ready when offer arrives
+          makePeer(vivaId, socket);
         }
       });
     });
 
-    // Admin just joined — create peer connection
     socket.on('peer-joined', function(data) {
+      console.log('[Student] peer-joined:', data.role, data.userName);
       if (data.role === 'admin') {
-        console.log('[Student] Admin joined room');
+        console.log('[Student] Admin joined — waiting for offer');
         setPeerStatus('connected');
-        createPeerConnection(vivaId, socket);
+        makePeer(vivaId, socket);
       }
     });
 
-    // Receive offer from admin — set remote desc and send answer
+    // THE MOST IMPORTANT HANDLER: receive offer, send answer
     socket.on('webrtc-offer', async function(data) {
-      console.log('[Student] Received offer from admin');
-      if (!pcRef.current) createPeerConnection(vivaId, socket);
+      console.log('[Student] ✅ Received WebRTC offer from admin!');
+      // Always create fresh peer when offer arrives
+      makePeer(vivaId, socket);
       var pc = pcRef.current;
       try {
         await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+        console.log('[Student] Remote desc set');
         var answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         socket.emit('webrtc-answer', { vivaId: vivaId, answer: pc.localDescription });
-        console.log('[Student] Answer sent');
-      } catch(e) { console.error('[Student] Answer failed:', e); }
+        console.log('[Student] ✅ Answer sent to admin');
+      } catch(e) {
+        console.error('[Student] ❌ Answer failed:', e);
+      }
     });
 
-    // Receive ICE candidates from admin
     socket.on('webrtc-ice-candidate', function(data) {
       if (pcRef.current && data.candidate) {
-        pcRef.current.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(function(){});
+        pcRef.current.addIceCandidate(new RTCIceCandidate(data.candidate))
+          .catch(function(e){ console.warn('[Student] ICE add failed:', e.message); });
       }
     });
 
@@ -224,55 +231,80 @@ export default function VivaJoin() {
       }
     });
 
-    socket.on('disconnect', function() { setPeerStatus('disconnected'); });
+    socket.on('disconnect', function() {
+      console.log('[Student] Socket disconnected');
+      setPeerStatus('disconnected');
+    });
+
+    socket.on('connect_error', function(e) {
+      console.error('[Student] Socket connection error:', e.message);
+    });
   }
 
-  function createPeerConnection(vivaId, socket) {
-    if (pcRef.current) { try { pcRef.current.close(); } catch(e){} }
+  function makePeer(vivaId, socket) {
+    // Close existing peer first
+    if (pcRef.current) {
+      try { pcRef.current.close(); } catch(e){}
+      pcRef.current = null;
+    }
 
     var pc = new RTCPeerConnection(ICE_SERVERS);
     pcRef.current = pc;
 
-    // Add our local tracks so admin can see/hear us
+    // Add our local stream tracks
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(function(t) {
         pc.addTrack(t, streamRef.current);
-        console.log('[Student] Added track:', t.kind);
+        console.log('[Student] Added track:', t.kind, t.label);
       });
+    } else {
+      console.warn('[Student] ⚠ No local stream when creating peer!');
     }
 
-    // When admin's stream arrives — show it
+    // When admin video/audio arrives
     pc.ontrack = function(e) {
-      console.log('[Student] Got remote track:', e.track.kind);
-      if (!e.streams || !e.streams[0]) return;
+      console.log('[Student] ✅ Got remote track:', e.track.kind);
+      if (!e.streams || !e.streams[0]) { console.warn('[Student] No streams in track event'); return; }
       var remoteStream = e.streams[0];
       setPeerStatus('streaming');
       var att = 0;
       var iv = setInterval(function() {
-        if (++att > 50) { clearInterval(iv); return; }
+        if (++att > 50) { clearInterval(iv); console.warn('[Student] remoteVid not mounted'); return; }
         if (!remoteVid.current) return;
         clearInterval(iv);
         remoteVid.current.srcObject = remoteStream;
         remoteVid.current.play().catch(function(){});
-        console.log('[Student] ✅ Admin video LIVE!');
+        console.log('[Student] ✅ Admin video playing!');
       }, 100);
     };
 
     // Send ICE candidates to admin
     pc.onicecandidate = function(e) {
-      if (e.candidate && socketRef.current) {
-        socketRef.current.emit('webrtc-ice-candidate', { vivaId: vivaId, candidate: e.candidate });
+      if (e.candidate) {
+        socket.emit('webrtc-ice-candidate', { vivaId: vivaId, candidate: e.candidate });
+      } else {
+        console.log('[Student] ICE gathering complete');
       }
     };
 
     pc.onconnectionstatechange = function() {
       console.log('[Student] Connection state:', pc.connectionState);
-      if (pc.connectionState === 'connected') setPeerStatus('streaming');
-      if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') setPeerStatus('disconnected');
+      if (pc.connectionState === 'connected') {
+        setPeerStatus('streaming');
+        console.log('[Student] ✅ CONNECTED!');
+      }
+      if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+        setPeerStatus('disconnected');
+      }
+    };
+
+    pc.oniceconnectionstatechange = function() {
+      console.log('[Student] ICE state:', pc.iceConnectionState);
     };
 
     return pc;
   }
+
 
   function toggleCam() {
     if (!streamRef.current) return;
