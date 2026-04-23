@@ -80,6 +80,23 @@ io.on('connection', (socket) => {
     socket.to(data.vivaId).emit('webrtc-ice-candidate', { candidate: data.candidate, fromSocketId: socket.id });
   });
 
+  // Admin → student: request student to start camera
+  socket.on('request-camera', (data) => {
+    console.log('[Admin] requesting student camera in room', data.vivaId);
+    socket.to(data.vivaId).emit('camera-requested', { fromAdmin: socket.vivaName });
+  });
+
+  // Student → admin: camera is now ready
+  socket.on('camera-ready', (data) => {
+    console.log('[Student] camera ready in room', data.vivaId);
+    socket.to(data.vivaId).emit('student-camera-ready', { studentName: socket.vivaName });
+  });
+
+  // Admin → student: stop camera
+  socket.on('stop-camera', (data) => {
+    socket.to(data.vivaId).emit('camera-stop', {});
+  });
+
   socket.on('disconnect', () => {
     console.log('🔌 Socket disconnected:', socket.id);
     if (socket.vivaId) {

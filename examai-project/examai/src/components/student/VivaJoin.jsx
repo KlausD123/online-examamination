@@ -3,372 +3,226 @@ import { useStore } from '../../store/useStore';
 import { apiGet, apiPost } from '../../utils/api';
 import { io } from 'socket.io-client';
 
-var ICE_SERVERS = { iceServers: [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' }
-]};
-
-var AWAY_LIMIT = 600;
-function saveS(d) { try { sessionStorage.setItem('vj', JSON.stringify(d)); } catch(e) {} }
-function loadS() { try { return JSON.parse(sessionStorage.getItem('vj') || 'null'); } catch(e) { return null; } }
-function clearS() { try { sessionStorage.removeItem('vj'); } catch(e) {} }
+var SOCKET_URL = 'http://localhost:5000';
+var ICE = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
 
 export default function VivaJoin() {
   var store = useStore();
-  var _s = loadS() || {};
+  var [phase,       setPhase]      = useState('join');
+  var [roomId,      setRoomId]     = useState('');
+  var [session,     setSession]    = useState(null);
+  var [invites,     setInvites]    = useState([]);
+  var [status,      setStatus]     = useState('waiting');
+  var [camOn,       setCamOn]      = useState(true);
+  var [micOn,       setMicOn]      = useState(true);
+  var [camState,    setCamState]   = useState('off'); // off | requesting | on
+  var [adminName,   setAdminName]  = useState('Examiner');
 
-  var [phase,      setPhaseRaw] = useState(_s.phase || 'join');
-  var [roomId,     setRoomId]   = useState(_s.roomId || '');
-  var [session,    setSession]  = useState(_s.session || null);
-  var [invites,    setInvites]  = useState([]);
-  var [camOk,      setCamOk]    = useState(false);
-  var [permErr,    setPermErr]  = useState('');
-  var [reGranting, setReGranting] = useState(false);
-  var [isAway,     setIsAway]   = useState(false);
-  var [countdown,  setCountdown] = useState(AWAY_LIMIT);
-  var [camOn,      setCamOn]    = useState(true);
-  var [micOn,      setMicOn]    = useState(true);
-  var [peerStatus, setPeerStatus] = useState('waiting'); // waiting|connected|streaming|disconnected
+  var localVid   = useRef(null);
+  var remoteVid  = useRef(null);
+  var myStream   = useRef(null);
+  var sock       = useRef(null);
+  var pc         = useRef(null);
+  var roomIdRef  = useRef('');
+  var vivaIdRef  = useRef('');
 
-  // Refs — same pattern as the shared VivaRoom component
-  var localVid   = useRef(null);  // student's own camera
-  var remoteVid  = useRef(null);  // admin's camera
-  var streamRef  = useRef(null);
-  var socketRef  = useRef(null);
-  var pcRef      = useRef(null);
-  var masterInt  = useRef(null);
-  var awayStart  = useRef(null);
-  var roomIdRef  = useRef(_s.roomId || '');
-  var sessionRef = useRef(_s.session || null);
-  var phaseRef   = useRef(_s.phase || 'join');
-  var isAwayRef  = useRef(false);
-  var notified   = useRef(false);
-  var previewRef = useRef(null);
-
-  useEffect(function() { phaseRef.current = phase; }, [phase]);
-  useEffect(function() { isAwayRef.current = isAway; }, [isAway]);
-  useEffect(function() { roomIdRef.current = roomId; }, [roomId]);
-  useEffect(function() { sessionRef.current = session; }, [session]);
   useEffect(function() {
-    if (phase === 'join') clearS(); else saveS({ phase, roomId, session });
-  }, [phase, roomId, session]); // eslint-disable-line
-
-  // Cleanup on unmount — same as shared component
-  useEffect(function() {
-    return function() {
-      if (socketRef.current) socketRef.current.disconnect();
-      if (pcRef.current) pcRef.current.close();
-      if (streamRef.current) streamRef.current.getTracks().forEach(function(t) { t.stop(); });
-      clearInterval(masterInt.current);
-    };
+    apiGet('/notifications').then(function(n) {
+      setInvites((n||[]).filter(function(x){return x.viva_room_id;}));
+    }).catch(function(){});
   }, []); // eslint-disable-line
 
-  // Visibility change handler
   useEffect(function() {
-    function onVis() {
-      if (document.hidden) {
-        setTimeout(function() { if (document.hidden && phaseRef.current === 'room' && !isAwayRef.current) goAway(); }, 2000);
-      } else { if (isAwayRef.current) comeback(); }
-    }
-    document.addEventListener('visibilitychange', onVis);
-    return function() { document.removeEventListener('visibilitychange', onVis); };
+    return function() { stopEverything(); };
   }, []); // eslint-disable-line
 
-  useEffect(function() { loadInvites(); }, []); // eslint-disable-line
-
-  function setPhase(p) {
-    setPhaseRaw(p); phaseRef.current = p;
-    if (p === 'join') clearS(); else saveS({ phase: p, roomId: roomIdRef.current, session: sessionRef.current });
+  function stopEverything() {
+    if (sock.current)     { sock.current.disconnect(); sock.current = null; }
+    if (pc.current)       { pc.current.close(); pc.current = null; }
+    if (myStream.current) { myStream.current.getTracks().forEach(function(t){t.stop();}); myStream.current = null; }
   }
 
-  function loadInvites() {
-    store.loadNotifications().then(function(n) { setInvites((n||[]).filter(function(x){return x.viva_room_id;})); });
-  }
-
-  function startMaster() {
-    clearInterval(masterInt.current);
-    var t = 0;
-    masterInt.current = setInterval(function() {
-      if (isAwayRef.current && awayStart.current) {
-        var rem = AWAY_LIMIT - Math.floor((Date.now() - awayStart.current) / 1000);
-        setCountdown(rem > 0 ? rem : 0);
-        if (rem <= 0) { awayStart.current = null; isAwayRef.current = false; setIsAway(false); cleanup(); setPhase('timeout'); }
-      }
-      if (++t >= 5) {
-        t = 0;
-        var vid = roomIdRef.current;
-        if (vid && phaseRef.current === 'room') {
-          apiGet('/viva/' + vid).then(function(s) {
-            if (s && (s.status === 'ended' || s.status === 'locked')) { cleanup(); setPhase('ended'); }
-          }).catch(function(){});
-        }
-      }
-    }, 1000);
-  }
-
-  function goAway() {
-    if (awayStart.current) return;
-    awayStart.current = Date.now(); isAwayRef.current = true; setIsAway(true); setCountdown(AWAY_LIMIT);
-    if (!notified.current) { notified.current = true; apiPost('/notifications', { title: 'Student Left Viva', message: (store.currentUser.name||'Student') + ' left the viva room.', type: 'urgent' }).catch(function(){}); }
-  }
-
-  function comeback() {
-    awayStart.current = null; isAwayRef.current = false; notified.current = false; setIsAway(false); setCountdown(AWAY_LIMIT);
-    if (localVid.current && streamRef.current) localVid.current.srcObject = streamRef.current;
-    apiPost('/notifications', { title: 'Student Returned', message: (store.currentUser.name||'Student') + ' returned.', type: 'success' }).catch(function(){});
-  }
-
-  function cleanup() {
-    clearInterval(masterInt.current);
-    if (pcRef.current) { try { pcRef.current.close(); } catch(e){} pcRef.current = null; }
-    if (socketRef.current) { try { socketRef.current.disconnect(); } catch(e){} socketRef.current = null; }
-    if (streamRef.current) { streamRef.current.getTracks().forEach(function(t){t.stop();}); streamRef.current = null; }
-  }
-
+  // ── JOIN ──────────────────────────────────────────────────────────────────
   async function handleJoin(id) {
-    var vid = (id || roomId || '').trim(); if (!vid) return;
+    var vid = (id || roomId || '').trim();
+    if (!vid) return;
     try {
       var s = await apiGet('/viva/' + vid);
       if (!s) { alert('Room not found'); return; }
-      if (s.status === 'ended' || s.status === 'locked') { alert('Session already ended.'); return; }
-      setSession(s); sessionRef.current = s; setRoomId(vid); roomIdRef.current = vid; setPhase('permission');
-    } catch(e) { alert('Room not found: ' + e.message); }
+      setSession(s); setRoomId(vid); roomIdRef.current = vid;
+      setPhase('room');
+      // Enter room immediately — camera will be started by admin
+      setTimeout(function() { startSignaling(vid); }, 200);
+    } catch(e) { alert('Room not found'); }
   }
 
-  async function requestPermissions() {
-    setPermErr('');
-    try {
-      var s = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      streamRef.current = s; setCamOk(true); setReGranting(false);
-      // Show preview
-      var iv = setInterval(function() { if (previewRef.current) { previewRef.current.srcObject = s; clearInterval(iv); } }, 100);
-    } catch(e) { setPermErr('Camera/mic denied — please allow in browser settings.'); }
-  }
-
-  function enterRoom() {
-    setPhase('room'); startMaster();
-    // Attach own video
-    var att = 0;
-    var iv = setInterval(function() {
-      if (++att > 40) { clearInterval(iv); return; }
-      if (!localVid.current || !streamRef.current) return;
-      clearInterval(iv);
-      localVid.current.srcObject = streamRef.current;
-      localVid.current.muted = true;
-      localVid.current.play().catch(function(){});
-    }, 100);
-    // Connect socket immediately — same pattern as shared VivaRoom
-    startSignaling(roomIdRef.current);
-  }
-
-  // ── WebRTC Signaling ─────────────────────────────────────────────────────────
+  // ── SIGNALING ─────────────────────────────────────────────────────────────
   function startSignaling(vivaId) {
-    if (socketRef.current) { try { socketRef.current.disconnect(); } catch(e){} }
-    if (pcRef.current) { try { pcRef.current.close(); } catch(e){} pcRef.current = null; }
+    vivaIdRef.current = vivaId;
+    if (sock.current) { sock.current.disconnect(); sock.current = null; }
 
-    var socket = io('http://localhost:5000');
-    socketRef.current = socket;
+    var socket = io(SOCKET_URL);
+    sock.current = socket;
 
     socket.on('connect', function() {
-      var name = localStorage.getItem('examai_user_name') || store.currentUser.name || 'Student';
-      console.log('[Student] Socket connected:', socket.id, '| Room:', vivaId);
+      var name = store.currentUser ? (store.currentUser.name || 'Student') : 'Student';
+      console.log('[Student] socket connected:', socket.id);
       socket.emit('join-viva-room', { vivaId: vivaId, role: 'student', userName: name });
     });
 
     socket.on('room-members', function(members) {
-      console.log('[Student] Room members:', members);
-      // Admin is already here — peer is ready, admin will send offer
       members.forEach(function(m) {
-        if (m.role === 'admin') {
-          console.log('[Student] Admin already in room — peer ready, waiting for offer');
-          setPeerStatus('connected');
-          // Create peer NOW so we're ready when offer arrives
-          makePeer(vivaId, socket);
-        }
+        if (m.role === 'admin') { setAdminName(m.userName || 'Examiner'); setStatus('connecting'); }
       });
     });
 
     socket.on('peer-joined', function(data) {
-      console.log('[Student] peer-joined:', data.role, data.userName);
-      if (data.role === 'admin') {
-        console.log('[Student] Admin joined — waiting for offer');
-        setPeerStatus('connected');
-        makePeer(vivaId, socket);
-      }
+      if (data.role === 'admin') { setAdminName(data.userName || 'Examiner'); setStatus('connecting'); }
     });
 
-    // THE MOST IMPORTANT HANDLER: receive offer, send answer
-    socket.on('webrtc-offer', async function(data) {
-      console.log('[Student] ✅ Received WebRTC offer from admin!');
-      // Always create fresh peer when offer arrives
-      makePeer(vivaId, socket);
-      var pc = pcRef.current;
-      try {
-        await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-        console.log('[Student] Remote desc set');
-        var answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        socket.emit('webrtc-answer', { vivaId: vivaId, answer: pc.localDescription });
-        console.log('[Student] ✅ Answer sent to admin');
-      } catch(e) {
-        console.error('[Student] ❌ Answer failed:', e);
-      }
+    // ★ Admin pressed "Start Student Camera" button
+    socket.on('camera-requested', function(data) {
+      console.log('[Student] Admin requested camera start');
+      setCamState('requesting');
+      startCamera(socket, vivaId);
+    });
+
+    // ★ Admin pressed "Stop Camera"
+    socket.on('camera-stop', function() {
+      console.log('[Student] Admin stopped camera');
+      stopCamera();
+    });
+
+    // Receive WebRTC offer from admin
+    socket.on('webrtc-offer', function(data) {
+      console.log('[Student] got offer');
+      handleOffer(socket, vivaId, data.offer);
     });
 
     socket.on('webrtc-ice-candidate', function(data) {
-      if (pcRef.current && data.candidate) {
-        pcRef.current.addIceCandidate(new RTCIceCandidate(data.candidate))
-          .catch(function(e){ console.warn('[Student] ICE add failed:', e.message); });
+      if (pc.current && data.candidate) {
+        pc.current.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(function(){});
       }
     });
 
     socket.on('peer-left', function(data) {
-      if (data.role === 'admin') {
-        console.log('[Student] Admin left');
-        setPeerStatus('disconnected');
-        if (remoteVid.current) remoteVid.current.srcObject = null;
-        if (pcRef.current) { try { pcRef.current.close(); } catch(e){} pcRef.current = null; }
-      }
+      if (data.role === 'admin') { setStatus('waiting'); if (remoteVid.current) remoteVid.current.srcObject = null; }
     });
 
-    socket.on('disconnect', function() {
-      console.log('[Student] Socket disconnected');
-      setPeerStatus('disconnected');
-    });
-
-    socket.on('connect_error', function(e) {
-      console.error('[Student] Socket connection error:', e.message);
-    });
+    socket.on('connect_error', function(e) { console.error('[Student] socket error:', e.message); });
   }
 
-  function makePeer(vivaId, socket) {
-    // Close existing peer first
-    if (pcRef.current) {
-      try { pcRef.current.close(); } catch(e){}
-      pcRef.current = null;
-    }
+  // ── CAMERA START (triggered by admin) ─────────────────────────────────────
+  async function startCamera(socket, vivaId) {
+    try {
+      var stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      myStream.current = stream;
+      setCamState('on'); setCamOn(true); setMicOn(true);
 
-    var pc = new RTCPeerConnection(ICE_SERVERS);
-    pcRef.current = pc;
-
-    // Add our local stream tracks
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(function(t) {
-        pc.addTrack(t, streamRef.current);
-        console.log('[Student] Added track:', t.kind, t.label);
-      });
-    } else {
-      console.warn('[Student] ⚠ No local stream when creating peer!');
-    }
-
-    // When admin video/audio arrives
-    pc.ontrack = function(e) {
-      console.log('[Student] ✅ Got remote track:', e.track.kind);
-      if (!e.streams || !e.streams[0]) { console.warn('[Student] No streams in track event'); return; }
-      var remoteStream = e.streams[0];
-      setPeerStatus('streaming');
-      var att = 0;
-      var iv = setInterval(function() {
-        if (++att > 50) { clearInterval(iv); console.warn('[Student] remoteVid not mounted'); return; }
-        if (!remoteVid.current) return;
-        clearInterval(iv);
-        remoteVid.current.srcObject = remoteStream;
-        remoteVid.current.play().catch(function(){});
-        console.log('[Student] ✅ Admin video playing!');
+      // Attach self-view
+      var a = 0;
+      var t = setInterval(function() {
+        if (++a > 50) { clearInterval(t); return; }
+        if (!localVid.current) return;
+        clearInterval(t);
+        localVid.current.srcObject = stream;
+        localVid.current.muted = true;
+        localVid.current.play().catch(function(){});
       }, 100);
-    };
 
-    // Send ICE candidates to admin
-    pc.onicecandidate = function(e) {
-      if (e.candidate) {
-        socket.emit('webrtc-ice-candidate', { vivaId: vivaId, candidate: e.candidate });
-      } else {
-        console.log('[Student] ICE gathering complete');
-      }
-    };
-
-    pc.onconnectionstatechange = function() {
-      console.log('[Student] Connection state:', pc.connectionState);
-      if (pc.connectionState === 'connected') {
-        setPeerStatus('streaming');
-        console.log('[Student] ✅ CONNECTED!');
-      }
-      if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-        setPeerStatus('disconnected');
-      }
-    };
-
-    pc.oniceconnectionstatechange = function() {
-      console.log('[Student] ICE state:', pc.iceConnectionState);
-    };
-
-    return pc;
+      // Tell admin camera is ready
+      socket.emit('camera-ready', { vivaId: vivaId });
+      console.log('[Student] camera started, told admin');
+    } catch(e) {
+      console.error('[Student] camera failed:', e);
+      setCamState('off');
+      alert('Camera/mic denied. Please allow access in your browser.');
+    }
   }
 
+  function stopCamera() {
+    if (myStream.current) { myStream.current.getTracks().forEach(function(t){t.stop();}); myStream.current = null; }
+    if (localVid.current) localVid.current.srcObject = null;
+    setCamState('off'); setCamOn(false);
+  }
+
+  // ── WEBRTC PEER ───────────────────────────────────────────────────────────
+  async function handleOffer(socket, vivaId, offer) {
+    if (pc.current) { pc.current.close(); pc.current = null; }
+    var p = new RTCPeerConnection(ICE);
+    pc.current = p;
+
+    // Add local tracks (if camera is on)
+    if (myStream.current) {
+      myStream.current.getTracks().forEach(function(t) {
+        p.addTrack(t, myStream.current);
+        console.log('[Student] added track:', t.kind);
+      });
+    }
+
+    p.ontrack = function(e) {
+      console.log('[Student] got remote track:', e.track.kind);
+      if (!e.streams || !e.streams[0]) return;
+      var rs = e.streams[0];
+      setStatus('connected');
+      var tries = 0;
+      var t = setInterval(function() {
+        if (++tries > 100) { clearInterval(t); return; }
+        if (!remoteVid.current) return;
+        clearInterval(t);
+        remoteVid.current.srcObject = rs;
+        remoteVid.current.play().catch(function(){});
+        console.log('[Student] ✅ admin video live!');
+      }, 50);
+    };
+
+    p.onicecandidate = function(e) {
+      if (e.candidate) socket.emit('webrtc-ice-candidate', { vivaId: vivaId, candidate: e.candidate });
+    };
+
+    p.onconnectionstatechange = function() {
+      console.log('[Student] conn:', p.connectionState);
+      if (p.connectionState === 'connected') setStatus('connected');
+      if (p.connectionState === 'failed') setStatus('waiting');
+    };
+
+    p.oniceconnectionstatechange = function() { console.log('[Student] ICE:', p.iceConnectionState); };
+
+    try {
+      await p.setRemoteDescription(new RTCSessionDescription(offer));
+      var answer = await p.createAnswer();
+      await p.setLocalDescription(answer);
+      socket.emit('webrtc-answer', { vivaId: vivaId, answer: p.localDescription });
+      console.log('[Student] ✅ answer sent');
+    } catch(e) { console.error('[Student] offer handling failed:', e); }
+  }
 
   function toggleCam() {
-    if (!streamRef.current) return;
-    streamRef.current.getVideoTracks().forEach(function(t){t.enabled=!camOn;});
+    if (!myStream.current) return;
+    myStream.current.getVideoTracks().forEach(function(t){ t.enabled = !camOn; });
     setCamOn(function(v){return !v;});
   }
   function toggleMic() {
-    if (!streamRef.current) return;
-    streamRef.current.getAudioTracks().forEach(function(t){t.enabled=!micOn;});
+    if (!myStream.current) return;
+    myStream.current.getAudioTracks().forEach(function(t){ t.enabled = !micOn; });
     setMicOn(function(v){return !v;});
   }
 
-  function leaveRoom() {
-    cleanup(); clearS(); setPhase('join'); setSession(null); sessionRef.current = null;
-    setRoomId(''); roomIdRef.current = ''; setCamOk(false); setPeerStatus('waiting');
-    awayStart.current = null; isAwayRef.current = false; notified.current = false;
-    setIsAway(false); setCountdown(AWAY_LIMIT);
+  function leave() {
+    stopEverything();
+    setPhase('join'); setSession(null); setRoomId(''); roomIdRef.current = '';
+    setStatus('waiting'); setCamState('off');
   }
 
-  // ── RENDERS ────────────────────────────────────────────────────────────────
-  if ((phase === 'room' || phase === 'permission') && !streamRef.current && !reGranting) return (
-    <div style={{minHeight:'calc(100vh - 60px)',display:'flex',alignItems:'center',justifyContent:'center',background:'#0d0d14',padding:24}}>
-      <div style={{textAlign:'center',background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.12)',borderRadius:20,padding:'40px 48px',maxWidth:480}}>
-        <div style={{fontSize:'3rem',marginBottom:12}}>📷</div>
-        <div style={{fontFamily:'Space Grotesk,sans-serif',fontWeight:800,fontSize:'1.4rem',color:'#fff',marginBottom:10}}>Camera Disconnected</div>
-        <div style={{fontSize:'0.88rem',color:'#9ca3af',marginBottom:24}}>Your camera was released. Re-grant access to continue.</div>
-        <div style={{display:'flex',gap:12,justifyContent:'center'}}>
-          <button className="btn btn-primary btn-lg" onClick={function(){setReGranting(true);setCamOk(false);setPermErr('');setPhaseRaw('permission');}}>🔓 Re-grant Camera</button>
-          <button className="btn btn-outline" onClick={leaveRoom}>Leave</button>
-        </div>
-      </div>
-    </div>
-  );
-
-  if (phase === 'ended') return (
-    <div style={{minHeight:'calc(100vh - 60px)',display:'flex',alignItems:'center',justifyContent:'center',background:'#0d0d14'}}>
-      <div style={{textAlign:'center',padding:40}}>
-        <div style={{fontSize:'4rem',marginBottom:16}}>🏁</div>
-        <div style={{fontFamily:'Space Grotesk,sans-serif',fontWeight:800,fontSize:'1.6rem',color:'#fff',marginBottom:12}}>Viva Session Ended</div>
-        <div style={{color:'#9ca3af',marginBottom:24}}>Your results will appear in <strong style={{color:'#a78bfa'}}>My Results</strong>.</div>
-        <button className="btn btn-primary" onClick={function(){clearS();setPhaseRaw('join');setSession(null);setRoomId('');}}>← Back</button>
-      </div>
-    </div>
-  );
-
-  if (phase === 'timeout') return (
-    <div style={{minHeight:'calc(100vh - 60px)',display:'flex',alignItems:'center',justifyContent:'center',background:'#0d0d14'}}>
-      <div style={{textAlign:'center',padding:40}}>
-        <div style={{fontSize:'4rem',marginBottom:16}}>⏰</div>
-        <div style={{fontFamily:'Space Grotesk,sans-serif',fontWeight:800,fontSize:'1.6rem',color:'#fff',marginBottom:12}}>Session Expired</div>
-        <button className="btn btn-outline" onClick={leaveRoom}>← Back</button>
-      </div>
-    </div>
-  );
-
+  // ── RENDERS ───────────────────────────────────────────────────────────────
   if (phase === 'join') return (
     <div className="fade-up">
-      <div className="page-header"><div><div className="page-title">🎙 Viva Voce</div><div className="page-subtitle">Join your oral examination</div></div></div>
+      <div className="page-header">
+        <div><div className="page-title">🎙 Viva Voce</div><div className="page-subtitle">Join your oral examination</div></div>
+      </div>
       {invites.length > 0 && (
         <div style={{marginBottom:28}}>
-          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14}}>
-            <div style={{fontWeight:700}}>📬 Your Invitations</div>
-            <button className="btn btn-ghost btn-sm" onClick={loadInvites}>↻ Refresh</button>
-          </div>
+          <div style={{fontWeight:700,marginBottom:14}}>📬 Your Invitations</div>
           <div className="grid-2">
             {invites.map(function(inv){return(
               <div key={inv.notification_id} className="card" style={{borderLeft:'4px solid var(--accent)'}}>
@@ -383,79 +237,96 @@ export default function VivaJoin() {
       <div className="card" style={{maxWidth:480}}>
         <div className="card-title">Join by Room ID</div>
         <div style={{display:'flex',gap:8,marginTop:12}}>
-          <input className="form-input" value={roomId} onChange={function(e){setRoomId(e.target.value);roomIdRef.current=e.target.value;}} placeholder="Paste Room ID…" style={{flex:1}}/>
+          <input className="form-input" value={roomId}
+            onChange={function(e){setRoomId(e.target.value); roomIdRef.current=e.target.value;}}
+            placeholder="Paste Room ID…" style={{flex:1}}/>
           <button className="btn btn-primary" onClick={function(){handleJoin();}} disabled={!roomId.trim()}>Join</button>
         </div>
       </div>
     </div>
   );
 
-  if (phase === 'permission') return (
-    <div className="fade-up" style={{maxWidth:520,margin:'40px auto',textAlign:'center'}}>
-      <div style={{fontSize:'3rem',marginBottom:12}}>🎥</div>
-      <div style={{fontFamily:'Space Grotesk,sans-serif',fontWeight:800,fontSize:'1.4rem',marginBottom:20}}>Camera & Microphone Required</div>
-      {camOk && <div style={{marginBottom:18}}><video ref={previewRef} autoPlay muted playsInline style={{width:'100%',maxWidth:320,borderRadius:12,background:'#000'}}/></div>}
-      {permErr && <div style={{padding:12,background:'rgba(220,38,38,.08)',border:'1px solid rgba(220,38,38,.2)',borderRadius:8,color:'var(--danger)',fontSize:'0.85rem',marginBottom:16}}>{permErr}</div>}
-      {!camOk
-        ? <button className="btn btn-primary btn-lg" onClick={requestPermissions}>🔓 Grant Camera & Mic</button>
-        : <button className="btn btn-success btn-lg" onClick={enterRoom}>🚀 Enter Viva Room</button>
-      }
-    </div>
-  );
-
-  // ── ROOM ──────────────────────────────────────────────────────────────────
-  var mm = Math.floor(countdown/60), ss = countdown%60, urgent = countdown < 120;
-  var statusColor = peerStatus==='streaming'?'#22c55e':peerStatus==='connected'?'#eab308':'#9ca3af';
-  var statusText  = peerStatus==='streaming'?'🟢 Examiner Connected':peerStatus==='connected'?'🔄 Connecting...':peerStatus==='disconnected'?'🔴 Examiner Disconnected':'⏳ Waiting for Examiner...';
+  // ── ROOM ─────────────────────────────────────────────────────────────────
+  var statusColor = status==='connected'?'#22c55e':status==='connecting'?'#eab308':'#9ca3af';
+  var statusText  = status==='connected'?'🟢 Live':status==='connecting'?'🔄 Connecting…':'⏳ Waiting';
 
   return (
-    <div className="viva-dark fade-up" style={{position:'relative'}}>
-      {isAway && (
-        <div style={{position:'fixed',inset:0,zIndex:9999,background:'rgba(13,13,20,.96)',display:'flex',alignItems:'center',justifyContent:'center',backdropFilter:'blur(4px)'}}>
-          <div style={{textAlign:'center',padding:40}}>
-            <div style={{fontSize:'4rem',marginBottom:12}}>⏸</div>
-            <div style={{fontFamily:'Space Grotesk,sans-serif',fontWeight:800,fontSize:'1.8rem',color:'#fff',marginBottom:8}}>You Left the Room</div>
-            <div style={{fontFamily:'JetBrains Mono,monospace',fontSize:'4rem',fontWeight:900,color:urgent?'#dc2626':'#f59e0b',marginBottom:20}}>{String(mm).padStart(2,'0')}:{String(ss).padStart(2,'0')}</div>
-            <button className="btn btn-primary btn-lg" onClick={comeback} style={{padding:'14px 48px'}}>▶ Return</button>
+    <div className="viva-dark fade-up">
+      {/* Top bar */}
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20,flexWrap:'wrap',gap:10}}>
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <span className="badge badge-success">🟢 In Room</span>
+          <span style={{fontWeight:700,color:'#fff'}}>{session ? session.title : 'Viva Session'}</span>
+        </div>
+        <button className="btn btn-sm btn-outline" onClick={function(){if(window.confirm('Leave?'))leave();}}>Leave</button>
+      </div>
+
+      {/* Camera status banner */}
+      {camState === 'off' && (
+        <div style={{padding:'14px 20px',background:'rgba(245,158,11,.1)',border:'1px solid rgba(245,158,11,.3)',borderRadius:12,marginBottom:16,display:'flex',alignItems:'center',gap:12}}>
+          <span style={{fontSize:'1.5rem'}}>⏳</span>
+          <div>
+            <div style={{fontWeight:700,color:'#fbbf24',fontSize:'0.9rem'}}>Waiting for examiner to start your camera</div>
+            <div style={{fontSize:'0.78rem',color:'#9ca3af',marginTop:2}}>The examiner will enable your camera when the viva begins. Please wait.</div>
           </div>
         </div>
       )}
-
-      {/* Top bar */}
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20,flexWrap:'wrap',gap:10}}>
-        <div style={{display:'flex',alignItems:'center',gap:12}}>
-          <span className="badge badge-success">🟢 In Room</span>
-          <span style={{fontWeight:700,color:'#fff',fontSize:'1.05rem'}}>{session ? session.title : 'Viva Session'}</span>
-          <span style={{fontSize:'0.8rem',fontWeight:600,color:statusColor}}>{statusText}</span>
+      {camState === 'requesting' && (
+        <div style={{padding:'14px 20px',background:'rgba(124,58,237,.15)',border:'1px solid rgba(124,58,237,.4)',borderRadius:12,marginBottom:16,display:'flex',alignItems:'center',gap:12}}>
+          <span style={{fontSize:'1.5rem'}}>🎥</span>
+          <div>
+            <div style={{fontWeight:700,color:'#a78bfa',fontSize:'0.9rem'}}>Starting your camera…</div>
+            <div style={{fontSize:'0.78rem',color:'#9ca3af',marginTop:2}}>Please allow camera access in your browser if prompted.</div>
+          </div>
         </div>
-        <button className="btn btn-sm btn-outline" onClick={function(){if(window.confirm('Leave?'))leaveRoom();}}>Leave</button>
-      </div>
+      )}
+      {camState === 'on' && (
+        <div style={{padding:'10px 20px',background:'rgba(22,163,74,.1)',border:'1px solid rgba(22,163,74,.3)',borderRadius:12,marginBottom:16,display:'flex',alignItems:'center',gap:12}}>
+          <span style={{fontSize:'1.2rem'}}>✅</span>
+          <div style={{fontWeight:700,color:'#4ade80',fontSize:'0.88rem'}}>Camera active — examiner can see you</div>
+        </div>
+      )}
 
-      {/* Video panels — same layout as shared VivaRoom */}
+      {/* Video grid */}
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,maxWidth:900,margin:'0 auto'}}>
-        {/* Own camera */}
+        {/* Your camera */}
         <div className="card" style={{padding:12}}>
-          <video ref={localVid} autoPlay muted playsInline style={{width:'100%',borderRadius:8,background:'#000',display:'block'}}/>
-          <div style={{fontSize:'0.75rem',textAlign:'center',marginTop:6,color:'#9ca3af'}}>📹 You ({store.currentUser.name})</div>
-          <div style={{display:'flex',gap:8,marginTop:8,justifyContent:'center'}}>
-            <button className={'btn btn-sm '+(camOn?'btn-success':'btn-danger')} onClick={toggleCam}>{camOn?'📷 Cam On':'📷 Cam Off'}</button>
-            <button className={'btn btn-sm '+(micOn?'btn-success':'btn-danger')} onClick={toggleMic}>{micOn?'🎤 Mic On':'🎤 Mic Off'}</button>
+          <div style={{fontSize:'0.72rem',fontWeight:700,color:'#9ca3af',textAlign:'center',marginBottom:8,letterSpacing:1,fontFamily:'JetBrains Mono,monospace'}}>📹 YOU</div>
+          <div style={{position:'relative',borderRadius:8,overflow:'hidden',background:'#111',minHeight:180}}>
+            <video ref={localVid} autoPlay muted playsInline style={{width:'100%',display:'block',minHeight:180,objectFit:'cover'}}/>
+            {camState === 'off' && (
+              <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:8}}>
+                <div style={{fontSize:'2.5rem',opacity:.3}}>📷</div>
+                <div style={{fontSize:'0.75rem',color:'#6b7280',fontWeight:600}}>Camera off</div>
+              </div>
+            )}
+            <div style={{position:'absolute',bottom:6,left:'50%',transform:'translateX(-50%)',background:'rgba(0,0,0,.65)',color:'#fff',fontSize:'0.65rem',padding:'2px 10px',borderRadius:12,whiteSpace:'nowrap'}}>
+              {store.currentUser ? store.currentUser.name : 'You'}
+            </div>
           </div>
+          {camState === 'on' && (
+            <div style={{display:'flex',gap:8,marginTop:8,justifyContent:'center'}}>
+              <button className={'btn btn-sm '+(camOn?'btn-success':'btn-danger')} onClick={toggleCam}>{camOn?'📷 On':'📷 Off'}</button>
+              <button className={'btn btn-sm '+(micOn?'btn-success':'btn-danger')} onClick={toggleMic}>{micOn?'🎤 On':'🎤 Off'}</button>
+            </div>
+          )}
         </div>
 
-        {/* Examiner camera */}
-        <div className="card" style={{padding:12,position:'relative'}}>
-          <video ref={remoteVid} autoPlay playsInline style={{width:'100%',borderRadius:8,background:'#000',minHeight:180,display:'block'}}/>
-          {/* Small status badge — never covers video */}
-          <div style={{position:'absolute',top:16,right:16,background:peerStatus==='streaming'?'rgba(22,163,74,.9)':'rgba(0,0,0,.7)',color:'#fff',fontSize:'0.65rem',padding:'3px 10px',borderRadius:12,fontWeight:700}}>
-            {peerStatus==='streaming'?'🟢 Live':peerStatus==='connected'?'🔄 Connecting…':'⏳ Waiting'}
+        {/* Examiner */}
+        <div className="card" style={{padding:12}}>
+          <div style={{fontSize:'0.72rem',fontWeight:700,color:'#9ca3af',textAlign:'center',marginBottom:8,letterSpacing:1,fontFamily:'JetBrains Mono,monospace'}}>👨‍🏫 {adminName.toUpperCase()}</div>
+          <div style={{position:'relative',borderRadius:8,overflow:'hidden',background:'#111',minHeight:180}}>
+            <video ref={remoteVid} autoPlay playsInline style={{width:'100%',display:'block',minHeight:180,objectFit:'cover'}}/>
+            <div style={{position:'absolute',top:6,right:8,background:status==='connected'?'rgba(22,163,74,.9)':'rgba(0,0,0,.7)',color:'#fff',fontSize:'0.62rem',padding:'2px 8px',borderRadius:10,fontWeight:700}}>
+              {statusText}
+            </div>
           </div>
-          <div style={{fontSize:'0.75rem',textAlign:'center',marginTop:6,color:'#9ca3af'}}>👨‍🏫 Examiner</div>
+          <div style={{fontSize:'0.75rem',textAlign:'center',marginTop:4,color:statusColor,fontWeight:600}}>{statusText}</div>
         </div>
       </div>
 
       <div style={{maxWidth:900,margin:'14px auto 0',padding:'10px 16px',background:'rgba(124,58,237,.1)',border:'1px solid rgba(124,58,237,.25)',borderRadius:10,fontSize:'0.82rem',color:'#a78bfa',textAlign:'center'}}>
-        🎤 Speak clearly. Your examiner can see and hear you in real time.
+        🎤 When your camera is active, speak clearly. Your examiner can see and hear you.
       </div>
     </div>
   );
