@@ -118,25 +118,27 @@ export default function VivaJoin() {
       var stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       myStream.current = stream;
       setCamState('on'); setCamOn(true); setMicOn(true);
+      console.log('[Student] camera got:', stream.getTracks().map(function(t){return t.kind+':'+t.readyState;}));
 
-      // Attach self-view
-      var a = 0;
-      var t = setInterval(function() {
-        if (++a > 50) { clearInterval(t); return; }
+      // Attach self-view — retry until video element is in DOM
+      var _a = 0;
+      var _t = setInterval(function() {
+        if (++_a > 50) { clearInterval(_t); return; }
         if (!localVid.current) return;
-        clearInterval(t);
+        clearInterval(_t);
         localVid.current.srcObject = stream;
         localVid.current.muted = true;
         localVid.current.play().catch(function(){});
-      }, 100);
+        console.log('[Student] self-view attached');
+      }, 50);
 
-      // Tell admin camera is ready
+      // Tell admin camera is ready — admin will now send WebRTC offer
       socket.emit('camera-ready', { vivaId: vivaId });
-      console.log('[Student] camera started, told admin');
+      console.log('[Student] ✅ camera ready, told admin');
     } catch(e) {
-      console.error('[Student] camera failed:', e);
+      console.error('[Student] camera failed:', e.name, e.message);
       setCamState('off');
-      alert('Camera/mic denied. Please allow access in your browser.');
+      alert('Camera/mic denied. Please allow access in your browser settings and try again.');
     }
   }
 
@@ -152,12 +154,14 @@ export default function VivaJoin() {
     var p = new RTCPeerConnection(ICE);
     pc.current = p;
 
-    // Add local tracks (if camera is on)
+    // Add local tracks — myStream must be set by now (camera-ready fires before offer)
     if (myStream.current) {
       myStream.current.getTracks().forEach(function(t) {
         p.addTrack(t, myStream.current);
-        console.log('[Student] added track:', t.kind);
+        console.log('[Student] addTrack:', t.kind, t.readyState, t.enabled);
       });
+    } else {
+      console.warn('[Student] ⚠ handleOffer called but NO local stream!');
     }
 
     p.ontrack = function(e) {

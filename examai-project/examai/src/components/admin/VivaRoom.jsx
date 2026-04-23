@@ -361,8 +361,8 @@ export default function VivaRoom() {
         if (m.role === 'student') {
           console.log('[Admin] student already in room:', m.userName);
           setStudentConnected(true);
-          store.addToast((m.userName||'Student') + ' is in the room', 'success');
-          if (stream) makeOffer(sock, vivaId, stream);
+          store.addToast((m.userName||'Student') + ' in room — press 📷 Start Cam', 'success');
+          // Do NOT offer yet — wait for student camera
         }
       });
     });
@@ -371,16 +371,19 @@ export default function VivaRoom() {
       console.log('[Admin] peer-joined:', data.role, data.userName);
       if (data.role === 'student') {
         setStudentConnected(true);
-        store.addToast((data.userName||'Student') + ' joined — press 📷 Start Cam to begin', 'success');
-        // Don't send offer yet — wait for student camera to start
+        store.addToast((data.userName||'Student') + ' joined — press 📷 Start Cam', 'success');
       }
     });
 
-    // Student camera is now ready — NOW send offer
+    // Student camera started → NOW create fresh peer and send offer
     sock.on('student-camera-ready', function(data) {
-      console.log('[Admin] student camera ready!');
-      store.addToast('Student camera ready — connecting…', 'success');
-      if (stream) makeOffer(sock, vivaId, stream);
+      console.log('[Admin] ✅ student camera ready — sending offer now');
+      store.addToast('Student camera ready — starting video…', 'success');
+      if (stream) {
+        makeOffer(sock, vivaId, stream);
+      } else {
+        console.warn('[Admin] student camera ready but admin has no stream!');
+      }
     });
 
 
