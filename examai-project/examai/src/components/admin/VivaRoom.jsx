@@ -504,6 +504,12 @@ export default function VivaRoom() {
 
   // ── TTS: speak question then start listening ─────────────────────────────
   function speakAndListen(text) {
+    // Send question to student so they can read it on their screen
+    var vivaId = savedVivaRef.current ? savedVivaRef.current.viva_id : null;
+    if (socketRef.current && socketRef.current.connected && vivaId) {
+      socketRef.current.emit('question-text', { vivaId: vivaId, text: text });
+    }
+
     if (!window.speechSynthesis || !text) {
       setFlow('listening'); flowRef.current = 'listening';
       capturedRef.current = ''; setCapturedText(''); setLiveWords('');
@@ -619,11 +625,20 @@ export default function VivaRoom() {
 
   // Admin clicks "Ask" for a specific question — can ask any question at any time
   function handleAskQuestion(idx) {
-    askedQIdxRef.current = idx;          // lock in what's being asked BEFORE async starts
-    setCurrentQ(idx); currentQRef.current = idx;
+    // Stop whatever is currently happening
+    stopSTT();
+    if (synthRef.current) synthRef.current.cancel();
+    setFlow('idle'); flowRef.current = 'idle';
+    capturedRef.current = ''; setCapturedText(''); setLiveWords('');
     setVerdict(null); setStatusMsg(''); setManualQMode(false);
-    capturedRef.current = ''; setCapturedText(''); setManualText('');
-    speakAndListen(questionsRef.current[idx].question);
+    setManualText && setManualText('');
+
+    // Small delay so state updates propagate
+    setTimeout(function() {
+      askedQIdxRef.current = idx;
+      setCurrentQ(idx); currentQRef.current = idx;
+      speakAndListen(questionsRef.current[idx].question);
+    }, 200);
   }
 
   function startVivaFlow() {
@@ -1439,13 +1454,13 @@ export default function VivaRoom() {
                         {done && tEntry && <div style={{ fontSize: '0.63rem', color: dotCol, fontFamily: 'JetBrains Mono,monospace' }}>{tEntry.score_pct}% · {tEntry.verdict}</div>}
                       </div>
                       <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-                        {!done && (flow === 'idle' || flow === 'waiting' || flow === 'done') && (
+                        {!done && (
                           <button onClick={function() { handleAskQuestion(i); }}
                             style={{ padding: '2px 8px', borderRadius: 5, border: '1px solid rgba(124,58,237,.4)', background: isCur ? 'rgba(124,58,237,.25)' : 'transparent', color: '#a78bfa', fontSize: '0.65rem', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
                             Ask
                           </button>
                         )}
-                        {done && (flow === 'idle' || flow === 'waiting' || flow === 'done') && (
+                        {done && (
                           <button onClick={function() { handleAskQuestion(i); }}
                             style={{ padding: '2px 8px', borderRadius: 5, border: '1px solid rgba(255,255,255,.12)', background: 'transparent', color: '#6b7280', fontSize: '0.65rem', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                             Re-ask

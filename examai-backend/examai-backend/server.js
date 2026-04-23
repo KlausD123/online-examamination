@@ -36,69 +36,93 @@ app.post('/api/ai/chat', require('./middleware/auth').authenticateToken, async (
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Debug endpoint — see all rooms and who's in them
+app.get('/api/debug/rooms', (req, res) => {
+  const result = {};
+  io.sockets.adapter.rooms.forEach((sids, roomId) => {
+    if (roomId.length > 10) { // skip socket-id rooms
+      const members = [];
+      sids.forEach(sid => {
+        const s = io.sockets.sockets.get(sid);
+        if (s) members.push({ id: sid, role: s.vivaRole, name: s.vivaName });
+      });
+      result[roomId] = members;
+    }
+  });
+  res.json(result);
+});
+
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
+app.get('/test', (req, res) => res.sendFile(require('path').join(__dirname, 'test-viva.html')));
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 app.use((err, req, res, next) => res.status(500).json({ error: err.message }));
 
-// ── WebRTC Signaling via Socket.IO ───────────────────────────────────────────
+// ── WebRTC Signaling ─────────────────────────────────────────────────────────
 io.on('connection', (socket) => {
-  console.log('🔌 Socket connected:', socket.id);
+  console.log('🔌 New socket:', socket.id);
 
   socket.on('join-viva-room', ({ vivaId, role, userName }) => {
     socket.join(vivaId);
     socket.vivaId   = vivaId;
     socket.vivaRole = role;
     socket.vivaName = userName || role;
-    console.log('[Viva]', role, '"' + socket.vivaName + '" joined room', vivaId);
 
-    // Tell everyone else someone joined
+    // Who else is already here?
+    const room = io.sockets.adapter.rooms.get(vivaId);
+    const others = [];
+    if (room) {
+      room.forEach(sid => {
+        if (sid !== socket.id) {
+          const s = io.sockets.sockets.get(sid);
+          if (s) others.push({ socketId: sid, role: s.vivaRole, userName: s.vivaName });
+        }
+      });
+    }
+
+    console.log(`[ROOM] ${role} "${userName}" → room ${vivaId} | others: ${JSON.stringify(others)}`);
+
+    // Tell others this person joined
     socket.to(vivaId).emit('peer-joined', { role, userName: socket.vivaName, socketId: socket.id });
 
-    // Tell the joiner who is already in the room
-    const roomSockets = io.sockets.adapter.rooms.get(vivaId);
-    if (roomSockets) {
-      const members = [];
-      roomSockets.forEach((sid) => {
-        const s = io.sockets.sockets.get(sid);
-        if (s && sid !== socket.id) members.push({ socketId: sid, role: s.vivaRole, userName: s.vivaName });
-      });
-      socket.emit('room-members', members);
-    }
+    // Tell this person who's already here
+    socket.emit('room-members', others);
   });
 
   socket.on('webrtc-offer', (data) => {
-    console.log('[WebRTC] Offer from', socket.vivaRole, 'in room', data.vivaId);
-    socket.to(data.vivaId).emit('webrtc-offer', { offer: data.offer, fromSocketId: socket.id, fromRole: socket.vivaRole, fromName: socket.vivaName });
+    console.log(`[OFFER] ${socket.vivaRole} → room ${data.vivaId}`);
+    socket.to(data.vivaId).emit('webrtc-offer', { offer: data.offer, fromSocketId: socket.id });
   });
 
   socket.on('webrtc-answer', (data) => {
-    console.log('[WebRTC] Answer from', socket.vivaRole, 'in room', data.vivaId);
-    socket.to(data.vivaId).emit('webrtc-answer', { answer: data.answer, fromSocketId: socket.id, fromRole: socket.vivaRole });
+    console.log(`[ANSWER] ${socket.vivaRole} → room ${data.vivaId}`);
+    socket.to(data.vivaId).emit('webrtc-answer', { answer: data.answer, fromSocketId: socket.id });
   });
 
   socket.on('webrtc-ice-candidate', (data) => {
     socket.to(data.vivaId).emit('webrtc-ice-candidate', { candidate: data.candidate, fromSocketId: socket.id });
   });
 
-  // Admin → student: request student to start camera
+  // Admin sends question text → relay to student so they can read it
+  socket.on('question-text', (data) => {
+    socket.to(data.vivaId).emit('question-text', { text: data.text });
+  });
+
   socket.on('request-camera', (data) => {
-    console.log('[Admin] requesting student camera in room', data.vivaId);
+    console.log(`[CAM-REQ] admin → room ${data.vivaId}`);
     socket.to(data.vivaId).emit('camera-requested', { fromAdmin: socket.vivaName });
   });
 
-  // Student → admin: camera is now ready
   socket.on('camera-ready', (data) => {
-    console.log('[Student] camera ready in room', data.vivaId);
+    console.log(`[CAM-READY] student → room ${data.vivaId}`);
     socket.to(data.vivaId).emit('student-camera-ready', { studentName: socket.vivaName });
   });
 
-  // Admin → student: stop camera
   socket.on('stop-camera', (data) => {
     socket.to(data.vivaId).emit('camera-stop', {});
   });
 
   socket.on('disconnect', () => {
-    console.log('🔌 Socket disconnected:', socket.id);
+    console.log(`🔌 Disconnected: ${socket.id} (${socket.vivaRole || '?'} in ${socket.vivaId || '?'})`);
     if (socket.vivaId) {
       socket.to(socket.vivaId).emit('peer-left', { role: socket.vivaRole, userName: socket.vivaName, socketId: socket.id });
     }
@@ -107,5 +131,6 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
-  console.log('\n✅ DExam Backend + WebRTC Signaling → http://localhost:' + PORT + '\n');
+  console.log(`\n✅ DExam Backend → http://localhost:${PORT}`);
+  console.log(`   Debug rooms: http://localhost:${PORT}/api/debug/rooms\n`);
 });
