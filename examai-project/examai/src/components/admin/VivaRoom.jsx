@@ -93,10 +93,8 @@ export default function VivaRoom() {
     if (s.currentQ != null) { setCurrentQ(s.currentQ); currentQRef.current = s.currentQ; askedQIdxRef.current = s.currentQ; }
     if (s.selStudentId) setSelStudentId(s.selStudentId);
     if (s.selStudentName) setSelStudentName(s.selStudentName);
-    // Restore to room (mid-session) — flow resets to idle so admin re-asks
     setPhase('room');
-    setTimeout(startCamera, 400);
-    setTimeout(setupWebRTC, 200);
+    setTimeout(setupWebRTC, 300);
     startPolling();
   }, []); // eslint-disable-line
 
@@ -200,7 +198,7 @@ export default function VivaRoom() {
   useEffect(function() { questionsRef.current= questions; }, [questions]);
 
   useEffect(function() {
-    if (_restore && _restore.viva_id) { setTimeout(startCamera, 400); startPolling(); }
+    if (_restore && _restore.viva_id) { setTimeout(setupWebRTC, 300); startPolling(); }
     return function() { stopAll(); };
   }, []); // eslint-disable-line
 
@@ -724,8 +722,7 @@ export default function VivaRoom() {
       savedVivaRef.current = vivaData;
       sessionStorage.setItem(SESSION_KEY, JSON.stringify(vivaData));
       setPhase('room');
-      setTimeout(startCamera, 300);
-      setTimeout(setupWebRTC, 200); // connect socket immediately, don't wait for camera
+      setTimeout(setupWebRTC, 300);
       startPolling();
     } catch(e) { store.addToast(e.message, 'error'); }
     setLoading(false);
