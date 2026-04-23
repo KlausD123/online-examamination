@@ -7,8 +7,7 @@ const { Server } = require('socket.io');
 const app    = express();
 const server = http.createServer(app);
 const io     = new Server(server, {
-  cors: { origin: '*', methods: ['GET', 'POST'] },
-  maxHttpBufferSize: 1e6
+  cors: { origin: '*', methods: ['GET', 'POST'] }
 });
 
 app.use(cors({ origin: '*', credentials: true }));
@@ -40,107 +39,87 @@ app.post('/api/ai/chat', require('./middleware/auth').authenticateToken, async (
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.use((req, res) => res.status(404).json({ error: 'Route not found: ' + req.method + ' ' + req.path }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
+app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 app.use((err, req, res, next) => res.status(500).json({ error: err.message }));
 
-// ── Socket.IO: WebRTC signaling + frame relay fallback ────────────────────
-const rooms = {};
+// ── WebRTC Signaling Server ──────────────────────────────────────────────────
+// Each viva room: one admin, one or more students
+// Signaling flow:
+//   1. Both join room via socket
+//   2. Admin creates offer → sends to student
+//   3. Student creates answer → sends to admin  
+//   4. Both exchange ICE candidates
+//   5. WebRTC peer connection established (direct video/audio)
+
+const rooms = {}; // { viva_id: { adminId: socketId, students: [socketId] } }
 
 io.on('connection', (socket) => {
 
-  socket.on('join-room', ({ viva_id, role, name }) => {
+  socket.on('join-viva', ({ viva_id, role, name }) => {
+    socket.data = { viva_id, role, name: name || role };
     socket.join(viva_id);
-    socket.data.viva_id = viva_id;
-    socket.data.role    = role;
-    socket.data.name    = name || role;
-    if (!rooms[viva_id]) rooms[viva_id] = { admin: null, students: [] };
+
+    if (!rooms[viva_id]) rooms[viva_id] = { adminId: null, students: [] };
+    const room = rooms[viva_id];
 
     if (role === 'admin') {
-      rooms[viva_id].admin = socket.id;
-      // Tell existing students admin joined
-      rooms[viva_id].students.forEach(function(sid) {
-        io.to(sid).emit('peer-joined', { role: 'admin', socketId: socket.id });
-      });
-      // Tell admin about existing students
-      rooms[viva_id].students.forEach(function(sid) {
-        const s = io.sockets.sockets.get(sid);
-        socket.emit('peer-joined', { role: 'student', socketId: sid, name: s ? s.data.name : 'Student' });
-      });
+      room.adminId = socket.id;
+      // Tell any already-waiting students that admin is here
+      room.students.forEach(sid => io.to(sid).emit('admin-ready', { adminId: socket.id }));
     } else {
-      if (!rooms[viva_id].students.includes(socket.id))
-        rooms[viva_id].students.push(socket.id);
-      const adminId = rooms[viva_id].admin;
-      if (adminId) {
-        io.to(adminId).emit('peer-joined', { role: 'student', socketId: socket.id, name: socket.data.name });
-        socket.emit('peer-joined', { role: 'admin', socketId: adminId });
+      room.students.push(socket.id);
+      // Tell admin a student joined so admin can initiate offer
+      if (room.adminId) {
+        io.to(room.adminId).emit('student-joined', { studentId: socket.id, name: socket.data.name });
+        // Also tell student admin is here (in case student joined after admin)
+        socket.emit('admin-ready', { adminId: room.adminId });
       }
     }
-    console.log('[VIVA]', role, name || '', 'joined', viva_id);
-    socket.emit('joined-ack', { role, viva_id });
+
+    console.log(`[VIVA] ${role} "${name}" joined ${viva_id} | admin:${!!room.adminId} students:${room.students.length}`);
+    socket.emit('room-joined', { viva_id, role, yourId: socket.id });
   });
 
-  // ── WebRTC signaling ───────────────────────────────────────────────────
-  socket.on('rtc-offer', ({ to, offer }) => {
-    io.to(to).emit('rtc-offer', { from: socket.id, offer });
+  // WebRTC: admin sends offer to specific student
+  socket.on('offer', ({ to, offer }) => {
+    io.to(to).emit('offer', { from: socket.id, offer });
   });
 
-  socket.on('rtc-answer', ({ to, answer }) => {
-    io.to(to).emit('rtc-answer', { from: socket.id, answer });
+  // WebRTC: student sends answer to admin
+  socket.on('answer', ({ to, answer }) => {
+    io.to(to).emit('answer', { from: socket.id, answer });
   });
 
-  socket.on('rtc-ice', ({ to, candidate }) => {
-    io.to(to).emit('rtc-ice', { from: socket.id, candidate });
+  // WebRTC: ICE candidates (both directions)
+  socket.on('ice', ({ to, candidate }) => {
+    io.to(to).emit('ice', { from: socket.id, candidate });
   });
 
-  // ── Frame relay fallback (for networks where WebRTC fails) ─────────────
-  socket.on('video-frame', (frameData) => {
-    const { viva_id, role } = socket.data;
-    if (!viva_id || !rooms[viva_id]) return;
-    if (role === 'admin') {
-      rooms[viva_id].students.forEach(function(sid) {
-        io.to(sid).emit('remote-frame', { role: 'admin', frame: frameData });
-      });
-    } else {
-      const adminId = rooms[viva_id].admin;
-      if (adminId) io.to(adminId).emit('remote-frame', { role: 'student', frame: frameData });
-    }
-  });
-
-  socket.on('audio-chunk', (chunk) => {
-    const { viva_id, role } = socket.data;
-    if (!viva_id || !rooms[viva_id]) return;
-    if (role === 'admin') {
-      rooms[viva_id].students.forEach(function(sid) { io.to(sid).emit('remote-audio', { role: 'admin', chunk }); });
-    } else {
-      const adminId = rooms[viva_id].admin;
-      if (adminId) io.to(adminId).emit('remote-audio', { role: 'student', chunk });
-    }
-  });
-
-  socket.on('end-session', ({ viva_id }) => {
-    socket.to(viva_id).emit('session-ended');
-    if (rooms[viva_id]) delete rooms[viva_id];
+  // Admin ends session
+  socket.on('end-viva', ({ viva_id }) => {
+    socket.to(viva_id).emit('viva-ended');
+    delete rooms[viva_id];
   });
 
   socket.on('disconnect', () => {
-    const { viva_id, role } = socket.data;
+    const { viva_id, role } = socket.data || {};
     if (!viva_id || !rooms[viva_id]) return;
+    const room = rooms[viva_id];
     if (role === 'admin') {
-      rooms[viva_id].admin = null;
-      socket.to(viva_id).emit('peer-left', { role: 'admin' });
+      room.adminId = null;
+      socket.to(viva_id).emit('admin-left');
     } else {
-      rooms[viva_id].students = (rooms[viva_id].students || []).filter(id => id !== socket.id);
-      const adminId = rooms[viva_id].admin;
-      if (adminId) io.to(adminId).emit('peer-left', { role: 'student', socketId: socket.id });
+      room.students = room.students.filter(id => id !== socket.id);
+      if (room.adminId) io.to(room.adminId).emit('student-left', { studentId: socket.id });
     }
+    console.log(`[VIVA] ${role} disconnected from ${viva_id}`);
   });
 });
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
-  console.log('\n✅ DExam Backend  →  http://localhost:' + PORT);
-  console.log('   Socket.IO: WebRTC signaling + frame relay');
-  console.log('   Groq AI  : ' + (process.env.GROQ_API_KEY ? 'configured' : 'not configured'));
-  console.log('   Database : ' + process.env.DB_NAME + '@' + process.env.DB_HOST + '\n');
+  console.log(`\n✅ DExam Backend → http://localhost:${PORT}`);
+  console.log(`   WebRTC signaling: ready`);
+  console.log(`   DB: ${process.env.DB_NAME}@${process.env.DB_HOST}\n`);
 });
