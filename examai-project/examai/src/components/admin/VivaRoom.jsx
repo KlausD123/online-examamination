@@ -94,6 +94,7 @@ export default function VivaRoom() {
     // Restore to room (mid-session) — flow resets to idle so admin re-asks
     setPhase('room');
     setTimeout(startCamera, 400);
+    setTimeout(setupWebRTC, 200);
     startPolling();
   }, []); // eslint-disable-line
 
@@ -304,7 +305,6 @@ export default function VivaRoom() {
         setCamReady(true);
         setFaceStatus('loading');
         startFaceDetection();
-        setTimeout(setupWebRTC, 500);
       }
       videoRef.current.onloadedmetadata = onReady;
       videoRef.current.oncanplay = onReady;
@@ -314,14 +314,14 @@ export default function VivaRoom() {
   }
 
   // ── Video relay via Socket.IO ─────────────────────────────────────────────
-  var frameIntervalRef = useRef(null);
+  var frameIntervalRef  = useRef(null);
   var audioProcessorRef = useRef(null);
-  var studentCanvasRef = useRef({});  // map of socketId → canvas element
 
   function setupWebRTC() {
     var vivaId = savedVivaRef.current ? savedVivaRef.current.viva_id : null;
-    if (!vivaId) return;
+    if (!vivaId) { console.warn('[Admin] No vivaId for setupWebRTC'); return; }
 
+    // Disconnect any existing socket
     if (socketRef.current) { try { socketRef.current.disconnect(); } catch(e) {} socketRef.current = null; }
 
     var sock = ioClient(SOCKET_URL, { transports: ['websocket', 'polling'] });
@@ -332,26 +332,25 @@ export default function VivaRoom() {
       sock.emit('join-room', { viva_id: vivaId, role: 'admin', name: 'Examiner' });
     });
 
-    // Server confirms join — NOW safe to send frames
     sock.on('joined-ack', function() {
-      console.log('[Admin] join-room acknowledged, starting frame relay');
-      // Wait for stream to be ready
+      console.log('[Admin] Joined ack received — starting frame relay');
+      // If stream is ready now, start immediately; otherwise poll for it
       var w = 0;
       var wiv = setInterval(function() {
-        w++;
-        if (w > 40) { clearInterval(wiv); return; }
+        if (++w > 60) { clearInterval(wiv); console.warn('[Admin] Stream never ready'); return; }
         if (!streamRef.current) return;
         clearInterval(wiv);
-        startSendingFrames(sock);
-        startSendingAudio(sock);
+        console.log('[Admin] Stream ready, starting frames');
+        startAdminVideo(sock);
+        startAdminAudio(sock);
       }, 300);
     });
 
     sock.on('peer-joined', function(data) {
       if (data.role === 'student') {
-        console.log('[Admin] Student joined:', data.socketId);
+        console.log('[Admin] Student joined:', data.socketId, data.name);
         setStudentConnected(true);
-        store.addToast('Student joined the room', 'success');
+        store.addToast((data.name || 'Student') + ' joined the room', 'success');
       }
     });
 
@@ -359,7 +358,7 @@ export default function VivaRoom() {
       if (data.role === 'student') {
         setStudentConnected(false);
         if (studentVidRef.current) {
-          try { studentVidRef.current.getContext('2d').clearRect(0,0,9999,9999); } catch(e) {}
+          try { studentVidRef.current.getContext('2d').clearRect(0, 0, 9999, 9999); } catch(e) {}
         }
       }
     });
@@ -368,97 +367,98 @@ export default function VivaRoom() {
       if (data.role !== 'student') return;
       var canvas = studentVidRef.current;
       if (!canvas) return;
-      var img = new Image();
+      var img = new window.Image();
       img.onload = function() {
-        var ctx = canvas.getContext('2d');
-        if (canvas.width !== img.width) canvas.width = img.width;
-        if (canvas.height !== img.height) canvas.height = img.height;
-        ctx.drawImage(img, 0, 0);
-        if (!studentConnected) setStudentConnected(true);
+        try {
+          var ctx = canvas.getContext('2d');
+          if (canvas.width !== img.width) canvas.width = img.width;
+          if (canvas.height !== img.height) canvas.height = img.height;
+          ctx.drawImage(img, 0, 0);
+          if (!studentConnected) setStudentConnected(true);
+        } catch(e) {}
       };
       img.src = data.frame;
     });
 
-    var adminAudioCtx = null;
+    var remAudioCtx = null;
     sock.on('remote-audio', function(data) {
       if (data.role !== 'student') return;
       try {
-        if (!adminAudioCtx) adminAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        var buf = adminAudioCtx.createBuffer(1, data.chunk.length, 44100);
+        if (!remAudioCtx) remAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (remAudioCtx.state === 'suspended') remAudioCtx.resume();
+        var buf = remAudioCtx.createBuffer(1, data.chunk.length, 44100);
         buf.getChannelData(0).set(new Float32Array(data.chunk));
-        var s2 = adminAudioCtx.createBufferSource();
-        s2.buffer = buf; s2.connect(adminAudioCtx.destination); s2.start();
+        var s2 = remAudioCtx.createBufferSource();
+        s2.buffer = buf; s2.connect(remAudioCtx.destination); s2.start();
       } catch(e) {}
     });
 
-    sock.on('session-ended', function() { store.addToast('Student ended session', 'info'); });
+    sock.on('disconnect', function() { setStudentConnected(false); });
   }
 
-
-  function startSendingFrames(sock) {
+  function startAdminVideo(sock) {
     clearInterval(frameIntervalRef.current);
     var cap = document.createElement('canvas');
     cap.width = 320; cap.height = 240;
     var ctx = cap.getContext('2d');
     var track = streamRef.current && streamRef.current.getVideoTracks()[0];
+    var sent = 0;
 
-    if (track && window.ImageCapture) {
-      var ic = new ImageCapture(track);
-      frameIntervalRef.current = setInterval(async function() {
-        if (!sock.connected) return;
+    function sendFrame() {
+      if (!sock.connected || !streamRef.current) return;
+      // ImageCapture is the most reliable way to grab frames
+      if (track && window.ImageCapture) {
         try {
-          var bmp = await ic.grabFrame();
-          ctx.drawImage(bmp, 0, 0, 320, 240);
-          sock.volatile.emit('video-frame', cap.toDataURL('image/jpeg', 0.35));
-        } catch(e) {}
-      }, 200);
-    } else {
+          new ImageCapture(track).grabFrame().then(function(bmp) {
+            ctx.drawImage(bmp, 0, 0, 320, 240);
+            sock.volatile.emit('video-frame', cap.toDataURL('image/jpeg', 0.4));
+            sent++;
+          }).catch(function() { fallback(); });
+        } catch(e) { fallback(); }
+      } else { fallback(); }
+    }
+
+    function fallback() {
       var v = videoRef.current;
-      frameIntervalRef.current = setInterval(function() {
-        if (!sock.connected) return;
-        if (!v) v = videoRef.current;
-        if (!v || v.readyState < 2 || v.videoWidth === 0) return;
+      if (v && v.readyState >= 2 && v.videoWidth > 0) {
         try {
           ctx.drawImage(v, 0, 0, 320, 240);
-          sock.volatile.emit('video-frame', cap.toDataURL('image/jpeg', 0.35));
+          sock.volatile.emit('video-frame', cap.toDataURL('image/jpeg', 0.4));
+          sent++;
         } catch(e) {}
-      }, 200);
+      }
     }
+
+    frameIntervalRef.current = setInterval(sendFrame, 200);
+    setTimeout(function() { console.log('[Admin] Frames sent so far:', sent); }, 2000);
   }
 
-
-  function startSendingAudio(sock, vivaId) {
+  function startAdminAudio(sock) {
     if (!streamRef.current) return;
-    var audioTracks = streamRef.current.getAudioTracks();
-    if (!audioTracks || audioTracks.length === 0) return;
+    if (streamRef.current.getAudioTracks().length === 0) return;
     try {
-      var audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      var src = audioCtx.createMediaStreamSource(streamRef.current);
-      var proc = audioCtx.createScriptProcessor(2048, 1, 1);
+      var actx = new (window.AudioContext || window.webkitAudioContext)();
+      var src = actx.createMediaStreamSource(streamRef.current);
+      var proc = actx.createScriptProcessor(4096, 1, 1);
       proc.onaudioprocess = function(e) {
-        if (!sock || !sock.connected) return;
-        var data = e.inputBuffer.getChannelData(0);
-        sock.emit('audio-chunk', Array.from(data));
+        if (!sock.connected) return;
+        sock.volatile.emit('audio-chunk', Array.from(e.inputBuffer.getChannelData(0)));
       };
       src.connect(proc);
-      proc.connect(audioCtx.destination);
-      audioProcessorRef.current = { audioCtx, proc, src };
-    } catch(e) { console.warn('[Admin] Audio relay failed:', e); }
+      proc.connect(actx.destination);
+      audioProcessorRef.current = { actx, src, proc };
+    } catch(e) { console.warn('[Admin] Audio failed:', e); }
   }
 
   function stopFrameRelay() {
-    clearInterval(frameIntervalRef.current);
+    clearInterval(frameIntervalRef.current); frameIntervalRef.current = null;
     if (audioProcessorRef.current) {
-      try {
-        audioProcessorRef.current.proc.disconnect();
-        audioProcessorRef.current.src.disconnect();
-        audioProcessorRef.current.audioCtx.close();
-      } catch(e) {}
+      try { audioProcessorRef.current.proc.disconnect(); audioProcessorRef.current.src.disconnect(); audioProcessorRef.current.actx.close(); } catch(e) {}
       audioProcessorRef.current = null;
     }
   }
 
-  async function createOfferForStudent() {}
+  async function createOfferForStudent() {} // kept for compatibility
 
 
   async function startFaceDetection() {
@@ -505,6 +505,7 @@ export default function VivaRoom() {
     }
     if (streamRef.current) { streamRef.current.getTracks().forEach(function(t) { t.stop(); }); streamRef.current = null; }
   }
+
 
   // ── TTS: speak question then start listening ─────────────────────────────
   function speakAndListen(text) {
@@ -735,7 +736,10 @@ export default function VivaRoom() {
       var vivaData = { viva_id: r.viva_id, title, topic };
       savedVivaRef.current = vivaData;
       sessionStorage.setItem(SESSION_KEY, JSON.stringify(vivaData));
-      setPhase('room'); setTimeout(startCamera, 300); startPolling();
+      setPhase('room');
+      setTimeout(startCamera, 300);
+      setTimeout(setupWebRTC, 200); // connect socket immediately, don't wait for camera
+      startPolling();
     } catch(e) { store.addToast(e.message, 'error'); }
     setLoading(false);
   }
