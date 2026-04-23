@@ -1170,15 +1170,10 @@ export default function VivaRoom() {
             <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#9ca3af', letterSpacing: 1, marginBottom: 5, textAlign: 'center', fontFamily: 'JetBrains Mono,monospace' }}>🎓 STUDENT</div>
             <div style={{ position: 'relative', borderRadius: 7, overflow: 'hidden', background: '#111', aspectRatio: '4/3' }}>
               <video ref={studentVidRef} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}/>
-              {!studentConnected && (
-                <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 8, background: '#111' }}>
-                  <div style={{ fontSize: '2rem', opacity: .3 }}>👤</div>
-                  <div style={{ fontSize: '0.72rem', color: '#6b7280', fontWeight: 600 }}>Waiting for student…</div>
-                </div>
-              )}
-              {studentConnected && (
-                <div style={{ position: 'absolute', top: 4, right: 6, background: 'rgba(22,163,74,.85)', color: '#fff', fontSize: '0.6rem', padding: '2px 8px', borderRadius: 10, fontWeight: 700 }}>🟢 Live</div>
-              )}
+              {/* Status badge — never covers the video */}
+              <div style={{ position: 'absolute', top: 4, right: 6, background: studentConnected ? 'rgba(22,163,74,.9)' : 'rgba(0,0,0,.6)', color: '#fff', fontSize: '0.6rem', padding: '2px 8px', borderRadius: 10, fontWeight: 700 }}>
+                {studentConnected ? '🟢 Live' : '⏳ Waiting'}
+              </div>
             </div>
             <div style={{ marginTop: 4, fontSize: '0.67rem', color: studentConnected ? '#4ade80' : '#6b7280', textAlign: 'center', fontWeight: 700 }}>{studentConnected ? '🟢 Student Connected' : '⏳ Waiting for student…'}</div>
           </div>

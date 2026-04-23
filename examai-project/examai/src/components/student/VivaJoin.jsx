@@ -446,14 +446,10 @@ export default function VivaJoin() {
         {/* Examiner camera */}
         <div className="card" style={{padding:12,position:'relative'}}>
           <video ref={remoteVid} autoPlay playsInline style={{width:'100%',borderRadius:8,background:'#000',minHeight:180,display:'block'}}/>
-          {peerStatus !== 'streaming' && (
-            <div style={{position:'absolute',top:12,left:12,right:12,bottom:36,display:'flex',alignItems:'center',justifyContent:'center',borderRadius:8,background:'rgba(0,0,0,.75)'}}>
-              <div style={{textAlign:'center',color:'#9ca3af'}}>
-                <div style={{fontSize:'2.5rem',marginBottom:8}}>{peerStatus==='waiting'?'⏳':peerStatus==='connected'?'🔄':'❌'}</div>
-                <div style={{fontSize:'0.8rem',fontWeight:600,color:statusColor}}>{statusText}</div>
-              </div>
-            </div>
-          )}
+          {/* Small status badge — never covers video */}
+          <div style={{position:'absolute',top:16,right:16,background:peerStatus==='streaming'?'rgba(22,163,74,.9)':'rgba(0,0,0,.7)',color:'#fff',fontSize:'0.65rem',padding:'3px 10px',borderRadius:12,fontWeight:700}}>
+            {peerStatus==='streaming'?'🟢 Live':peerStatus==='connected'?'🔄 Connecting…':'⏳ Waiting'}
+          </div>
           <div style={{fontSize:'0.75rem',textAlign:'center',marginTop:6,color:'#9ca3af'}}>👨‍🏫 Examiner</div>
         </div>
       </div>
