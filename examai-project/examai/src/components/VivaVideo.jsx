@@ -174,7 +174,6 @@ export default function VivaVideo({ vivaId, role, displayName, onSocketReady }) 
   }
 
   var remoteLabel = role === 'admin' ? '🎓 Student' : '👨‍🏫 Examiner';
-  var localLabel  = role === 'admin' ? '👨‍🏫 You (Examiner)' : '🎓 You (' + (displayName||'Student') + ')';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -185,41 +184,35 @@ export default function VivaVideo({ vivaId, role, displayName, onSocketReady }) 
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-        {/* Local video */}
-        <div style={{ position: 'relative', borderRadius: 10, overflow: 'hidden', background: '#0a0a14', aspectRatio: '4/3' }}>
+      {/* Remote video ONLY — admin sees student, student sees admin */}
+      <div style={{ position: 'relative', borderRadius: 10, overflow: 'hidden', background: '#0a0a14', aspectRatio: '4/3' }}>
+        <video ref={remoteVid} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}/>
+
+        {/* Picture-in-picture: own camera small in corner */}
+        <div style={{ position: 'absolute', bottom: 8, right: 8, width: 90, height: 68, borderRadius: 7, overflow: 'hidden', border: '2px solid rgba(255,255,255,.2)', background: '#000' }}>
           <video ref={localVid} autoPlay muted playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}/>
-          <div style={{ position: 'absolute', bottom: 6, left: 8, background: 'rgba(0,0,0,.65)', color: '#fff', fontSize: '0.62rem', padding: '2px 8px', borderRadius: 8, fontWeight: 600 }}>{localLabel}</div>
-          {!camOn && <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0a0a14' }}><span style={{ fontSize: '1.5rem', opacity: .4 }}>📷</span></div>}
         </div>
 
-        {/* Remote video */}
-        <div style={{ position: 'relative', borderRadius: 10, overflow: 'hidden', background: '#0a0a14', aspectRatio: '4/3' }}>
-          <video ref={remoteVid} autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}/>
-          {!connected && (
-            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 6 }}>
-              <span style={{ fontSize: '1.5rem', opacity: .3 }}>👤</span>
-              <span style={{ fontSize: '0.65rem', color: '#4b5563', fontWeight: 600 }}>Waiting…</span>
-            </div>
-          )}
-          <div style={{ position: 'absolute', bottom: 6, left: 8, background: connected ? 'rgba(22,163,74,.85)' : 'rgba(0,0,0,.65)', color: '#fff', fontSize: '0.62rem', padding: '2px 8px', borderRadius: 8, fontWeight: 600 }}>
-            {connected ? '🟢 ' : '⏳ '}{remoteLabel}
-          </div>
+        {/* Remote label */}
+        <div style={{ position: 'absolute', bottom: 8, left: 8, background: connected ? 'rgba(22,163,74,.85)' : 'rgba(0,0,0,.7)', color: '#fff', fontSize: '0.65rem', padding: '3px 10px', borderRadius: 8, fontWeight: 700 }}>
+          {connected ? '🟢 ' : '⏳ '}{remoteLabel}
         </div>
+
+        {/* Waiting overlay when not connected */}
+        {!connected && (
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 8 }}>
+            <span style={{ fontSize: '2.5rem', opacity: .2 }}>👤</span>
+            <span style={{ fontSize: '0.75rem', color: '#4b5563', fontWeight: 600 }}>Waiting for {remoteLabel}…</span>
+          </div>
+        )}
       </div>
 
       {/* Controls */}
       <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
-        <button onClick={toggleCam}
-          style={{ padding: '5px 14px', borderRadius: 7, border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: '0.72rem',
-            background: camOn ? 'rgba(22,163,74,.2)' : 'rgba(220,38,38,.2)',
-            color: camOn ? '#4ade80' : '#f87171' }}>
+        <button onClick={toggleCam} style={{ padding: '5px 14px', borderRadius: 7, border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: '0.72rem', background: camOn ? 'rgba(22,163,74,.2)' : 'rgba(220,38,38,.2)', color: camOn ? '#4ade80' : '#f87171' }}>
           {camOn ? '📷 Cam On' : '📷 Off'}
         </button>
-        <button onClick={toggleMic}
-          style={{ padding: '5px 14px', borderRadius: 7, border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: '0.72rem',
-            background: micOn ? 'rgba(22,163,74,.2)' : 'rgba(220,38,38,.2)',
-            color: micOn ? '#4ade80' : '#f87171' }}>
+        <button onClick={toggleMic} style={{ padding: '5px 14px', borderRadius: 7, border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: '0.72rem', background: micOn ? 'rgba(22,163,74,.2)' : 'rgba(220,38,38,.2)', color: micOn ? '#4ade80' : '#f87171' }}>
           {micOn ? '🎤 Mic On' : '🎤 Off'}
         </button>
       </div>
