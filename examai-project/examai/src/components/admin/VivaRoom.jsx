@@ -3,7 +3,7 @@ import { useStore } from '../../store/useStore';
 import { groqChat } from '../../utils/aiService';
 import { apiPost, apiGet } from '../../utils/api';
 import { io as ioClient } from 'socket.io-client';
-import JitsiMeet from '../JitsiMeet';
+import VivaVideo from '../VivaVideo';
 
 var SOCKET_URL = 'http://localhost:5000';
 
@@ -1194,15 +1194,18 @@ export default function VivaRoom() {
         {/* LEFT: Jitsi video + question tools */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, overflow: 'auto' }}>
 
-          {/* Jitsi Meet video call */}
-          <div className="card" style={{ padding: 8 }}>
-            <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#9ca3af', letterSpacing: 1, marginBottom: 6, textAlign: 'center', fontFamily: 'JetBrains Mono,monospace' }}>📹 LIVE VIDEO CALL</div>
-            {savedVivaRef.current
-              ? <JitsiMeet roomName={savedVivaRef.current.viva_id} displayName="Examiner" height={340} />
-              : <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6b7280', fontSize: '0.8rem' }}>Start room to begin video call</div>
-            }
-            <div style={{ marginTop: 6, fontSize: '0.7rem', color: '#6b7280', textAlign: 'center' }}>Student joins via their invite — same room automatically</div>
-          </div>
+          {/* WebRTC video — admin sees student, student sees admin */}
+          {savedVivaRef.current && (
+            <div className="card" style={{ padding: 8 }}>
+              <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#9ca3af', letterSpacing: 1, marginBottom: 8, textAlign: 'center', fontFamily: 'JetBrains Mono,monospace' }}>📹 LIVE VIDEO</div>
+              <VivaVideo
+                vivaId={savedVivaRef.current.viva_id}
+                role="admin"
+                displayName="Examiner"
+                onSocketReady={function(sock) { socketRef.current = sock; }}
+              />
+            </div>
+          )}
 
           <div className="card" style={{ padding: 12 }}>
             <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#9ca3af', letterSpacing: 1, marginBottom: 7, fontFamily: 'JetBrains Mono,monospace' }}>⚡ GENERATE QUESTIONS</div>
