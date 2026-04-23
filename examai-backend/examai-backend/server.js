@@ -8,7 +8,7 @@ const app    = express();
 const server = http.createServer(app);
 const io     = new Server(server, {
   cors: { origin: '*', methods: ['GET', 'POST'] },
-  maxHttpBufferSize: 2e6  // 2MB for video frames
+  maxHttpBufferSize: 1e6
 });
 
 app.use(cors({ origin: '*', credentials: true }));
@@ -44,12 +44,11 @@ app.get('/api/health', (req, res) => res.json({ status: 'ok', time: new Date().t
 app.use((req, res) => res.status(404).json({ error: 'Route not found: ' + req.method + ' ' + req.path }));
 app.use((err, req, res, next) => res.status(500).json({ error: err.message }));
 
-// ── Socket.IO: room management + video relay ───────────────────────────────
+// ── Socket.IO: WebRTC signaling + frame relay fallback ────────────────────
 const rooms = {};
 
 io.on('connection', (socket) => {
 
-  // Join a viva room
   socket.on('join-room', ({ viva_id, role, name }) => {
     socket.join(viva_id);
     socket.data.viva_id = viva_id;
@@ -59,7 +58,10 @@ io.on('connection', (socket) => {
 
     if (role === 'admin') {
       rooms[viva_id].admin = socket.id;
-      socket.to(viva_id).emit('peer-joined', { role: 'admin', socketId: socket.id });
+      // Tell existing students admin joined
+      rooms[viva_id].students.forEach(function(sid) {
+        io.to(sid).emit('peer-joined', { role: 'admin', socketId: socket.id });
+      });
       // Tell admin about existing students
       rooms[viva_id].students.forEach(function(sid) {
         const s = io.sockets.sockets.get(sid);
@@ -74,37 +76,37 @@ io.on('connection', (socket) => {
         socket.emit('peer-joined', { role: 'admin', socketId: adminId });
       }
     }
-    console.log('[VIVA]', role, name || '', 'joined', viva_id, '| students:', rooms[viva_id].students.length, '| admin:', !!rooms[viva_id].admin);
-    // Acknowledge join so client knows it's safe to start sending frames
+    console.log('[VIVA]', role, name || '', 'joined', viva_id);
     socket.emit('joined-ack', { role, viva_id });
   });
 
-  // WebRTC signaling (kept for potential use)
-  socket.on('offer',         ({ to, offer })     => { if (to) io.to(to).emit('offer',         { from: socket.id, offer }); });
-  socket.on('answer',        ({ to, answer })    => { if (to) io.to(to).emit('answer',        { from: socket.id, answer }); });
-  socket.on('ice-candidate', ({ to, candidate }) => { if (to) io.to(to).emit('ice-candidate', { from: socket.id, candidate }); });
+  // ── WebRTC signaling ───────────────────────────────────────────────────
+  socket.on('rtc-offer', ({ to, offer }) => {
+    io.to(to).emit('rtc-offer', { from: socket.id, offer });
+  });
 
-  // Video frame relay — admin sends frame, server broadcasts to all students in room; student sends frame, server sends to admin
-  var frameCounts = {};
+  socket.on('rtc-answer', ({ to, answer }) => {
+    io.to(to).emit('rtc-answer', { from: socket.id, answer });
+  });
+
+  socket.on('rtc-ice', ({ to, candidate }) => {
+    io.to(to).emit('rtc-ice', { from: socket.id, candidate });
+  });
+
+  // ── Frame relay fallback (for networks where WebRTC fails) ─────────────
   socket.on('video-frame', (frameData) => {
     const { viva_id, role } = socket.data;
     if (!viva_id || !rooms[viva_id]) return;
-    // Log every 50th frame to confirm relay is working
-    frameCounts[socket.id] = (frameCounts[socket.id] || 0) + 1;
-    if (frameCounts[socket.id] % 50 === 1) console.log('[RELAY] frame from', role, 'in', viva_id, 'count:', frameCounts[socket.id]);
     if (role === 'admin') {
-      // Send admin frame to all students
       rooms[viva_id].students.forEach(function(sid) {
         io.to(sid).emit('remote-frame', { role: 'admin', frame: frameData });
       });
     } else {
-      // Send student frame to admin
       const adminId = rooms[viva_id].admin;
-      if (adminId) io.to(adminId).emit('remote-frame', { role: 'student', socketId: socket.id, frame: frameData });
+      if (adminId) io.to(adminId).emit('remote-frame', { role: 'student', frame: frameData });
     }
   });
 
-  // Audio relay via Web Audio API data
   socket.on('audio-chunk', (chunk) => {
     const { viva_id, role } = socket.data;
     if (!viva_id || !rooms[viva_id]) return;
@@ -138,7 +140,7 @@ io.on('connection', (socket) => {
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log('\n✅ DExam Backend  →  http://localhost:' + PORT);
-  console.log('   Socket.IO: video relay + WebRTC signaling');
+  console.log('   Socket.IO: WebRTC signaling + frame relay');
   console.log('   Groq AI  : ' + (process.env.GROQ_API_KEY ? 'configured' : 'not configured'));
   console.log('   Database : ' + process.env.DB_NAME + '@' + process.env.DB_HOST + '\n');
 });

@@ -6,6 +6,14 @@ import { io as ioClient } from 'socket.io-client';
 
 var SOCKET_URL = 'http://localhost:5000';
 
+var ICE_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'turn:openrelay.metered.ca:80',     username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turn:openrelay.metered.ca:443',    username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+];
+
 var API = 'http://localhost:5000/api';
 var SESSION_KEY = 'dexam_viva_session';
 var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -170,6 +178,7 @@ export default function VivaRoom() {
   var [permBlocked,      setPermBlocked]      = useState(false); // camera/mic blocked by browser
   var videoRef      = useRef(null);
   var studentVidRef = useRef(null);
+  var studentRemoteVid = useRef(null); // WebRTC remote video from student
   var canvasRef     = useRef(null);
   var streamRef     = useRef(null);
   var peerRef       = useRef(null);
@@ -319,15 +328,17 @@ export default function VivaRoom() {
     }, 200);
   }
 
-  // ── Video relay via Socket.IO ─────────────────────────────────────────────
+  // ── Video: WebRTC (primary) + Canvas relay (fallback) ───────────────────
   var frameIntervalRef  = useRef(null);
   var audioProcessorRef = useRef(null);
+  var pcRef             = useRef(null); // RTCPeerConnection per student
+  var usingWebRTC       = useRef(false);
+  var studentRemoteVid  = useRef(null); // <video> for WebRTC remote stream
 
   function setupWebRTC() {
     var vivaId = savedVivaRef.current ? savedVivaRef.current.viva_id : null;
-    if (!vivaId) { console.warn('[Admin] No vivaId for setupWebRTC'); return; }
+    if (!vivaId) return;
 
-    // Disconnect any existing socket
     if (socketRef.current) { try { socketRef.current.disconnect(); } catch(e) {} socketRef.current = null; }
 
     var sock = ioClient(SOCKET_URL, { transports: ['websocket', 'polling'] });
@@ -339,16 +350,15 @@ export default function VivaRoom() {
     });
 
     sock.on('joined-ack', function() {
-      console.log('[Admin] Joined ack received — starting frame relay');
-      // If stream is ready now, start immediately; otherwise poll for it
+      console.log('[Admin] Joined - starting canvas relay + waiting for students');
+      // Start canvas relay (sends admin video to students via server)
       var w = 0;
       var wiv = setInterval(function() {
-        if (++w > 60) { clearInterval(wiv); console.warn('[Admin] Stream never ready'); return; }
+        if (++w > 60) { clearInterval(wiv); return; }
         if (!streamRef.current) return;
         clearInterval(wiv);
-        console.log('[Admin] Stream ready, starting frames');
-        startAdminVideo(sock);
-        startAdminAudio(sock);
+        startCanvasRelay(sock);
+        startAudioRelay(sock);
       }, 300);
     });
 
@@ -356,136 +366,180 @@ export default function VivaRoom() {
       if (data.role === 'student') {
         console.log('[Admin] Student joined:', data.socketId, data.name);
         setStudentConnected(true);
-        store.addToast((data.name || 'Student') + ' joined the room', 'success');
+        store.addToast((data.name || 'Student') + ' joined', 'success');
+        // Initiate WebRTC offer to student
+        startWebRTCOffer(sock, data.socketId);
       }
     });
 
     sock.on('peer-left', function(data) {
       if (data.role === 'student') {
-        setStudentConnected(false);
-        if (studentVidRef.current) {
-          try { studentVidRef.current.getContext('2d').clearRect(0, 0, 9999, 9999); } catch(e) {}
-        }
+        setStudentConnected(false); usingWebRTC.current = false;
+        if (studentVidRef.current) { try { studentVidRef.current.getContext('2d').clearRect(0,0,9999,9999); } catch(e) {} }
+        if (studentRemoteVid.current) studentRemoteVid.current.srcObject = null;
       }
     });
 
-    var studentConnectedRef = { current: false };
+    // WebRTC: receive answer from student
+    sock.on('rtc-answer', async function(data) {
+      if (!pcRef.current) return;
+      try {
+        await pcRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
+        console.log('[Admin] WebRTC answer received');
+      } catch(e) { console.warn('[Admin] setRemoteDescription failed:', e); }
+    });
 
+    sock.on('rtc-ice', async function(data) {
+      if (pcRef.current && data.candidate) {
+        try { await pcRef.current.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch(e) {}
+      }
+    });
+
+    // Canvas relay fallback: receive student frames
+    var scRef = { current: false };
     sock.on('remote-frame', function(data) {
-      if (data.role !== 'student') return;
-      var canvas = studentVidRef.current;
-      if (!canvas) return;
-      // Use createImageBitmap for GPU-accelerated smooth rendering
-      fetch(data.frame).then(function(r) { return r.blob(); }).then(function(blob) {
-        return window.createImageBitmap(blob);
-      }).then(function(bmp) {
-        var ctx = canvas.getContext('2d');
-        if (canvas.width !== bmp.width) canvas.width = bmp.width;
-        if (canvas.height !== bmp.height) canvas.height = bmp.height;
-        ctx.drawImage(bmp, 0, 0);
-        bmp.close();
-        if (!studentConnectedRef.current) {
-          studentConnectedRef.current = true;
-          setStudentConnected(true);
-        }
-      }).catch(function() {
-        // Fallback to Image element
-        var img = new window.Image();
-        img.onload = function() {
-          try {
-            var ctx = canvas.getContext('2d');
-            if (canvas.width !== img.width) canvas.width = img.width;
-            if (canvas.height !== img.height) canvas.height = img.height;
-            ctx.drawImage(img, 0, 0);
-            if (!studentConnectedRef.current) { studentConnectedRef.current = true; setStudentConnected(true); }
-          } catch(e) {}
-        };
-        img.src = data.frame;
-      });
+      if (data.role !== 'student' || usingWebRTC.current) return;
+      var canvas = studentVidRef.current; if (!canvas) return;
+      var img = new Image();
+      img.onload = function() {
+        try {
+          var ctx = canvas.getContext('2d');
+          canvas.width = img.width; canvas.height = img.height;
+          ctx.drawImage(img, 0, 0);
+          if (!scRef.current) { scRef.current = true; setStudentConnected(true); }
+        } catch(e) {}
+      };
+      img.src = data.frame;
     });
 
     var remAudioCtx = null;
     sock.on('remote-audio', function(data) {
-      if (data.role !== 'student') return;
+      if (data.role !== 'student' || usingWebRTC.current) return;
       try {
         if (!remAudioCtx) remAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
         if (remAudioCtx.state === 'suspended') remAudioCtx.resume();
         var buf = remAudioCtx.createBuffer(1, data.chunk.length, 44100);
         buf.getChannelData(0).set(new Float32Array(data.chunk));
-        var s2 = remAudioCtx.createBufferSource();
-        s2.buffer = buf; s2.connect(remAudioCtx.destination); s2.start();
+        var s2 = remAudioCtx.createBufferSource(); s2.buffer = buf; s2.connect(remAudioCtx.destination); s2.start();
       } catch(e) {}
     });
 
-    sock.on('disconnect', function() { setStudentConnected(false); });
+    sock.on('disconnect', function() { setStudentConnected(false); usingWebRTC.current = false; });
   }
 
-  function startAdminVideo(sock) {
+  async function startWebRTCOffer(sock, studentSocketId) {
+    if (pcRef.current) { try { pcRef.current.close(); } catch(e) {} pcRef.current = null; }
+    var vivaId = savedVivaRef.current ? savedVivaRef.current.viva_id : null;
+
+    var pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    pcRef.current = pc;
+
+    if (streamRef.current) streamRef.current.getTracks().forEach(function(t) { pc.addTrack(t, streamRef.current); });
+
+    pc.ontrack = function(e) {
+      if (!e.streams || !e.streams[0]) return;
+      usingWebRTC.current = true;
+      setStudentConnected(true);
+      console.log('[Admin] WebRTC student track received!');
+      var att = 0;
+      var iv = setInterval(function() {
+        if (++att > 30) { clearInterval(iv); return; }
+        if (!studentRemoteVid.current) return;
+        clearInterval(iv);
+        studentRemoteVid.current.srcObject = e.streams[0];
+        studentRemoteVid.current.play().catch(function() {});
+      }, 100);
+    };
+
+    pc.onicecandidate = function(e) {
+      if (e.candidate) sock.emit('rtc-ice', { to: studentSocketId, candidate: e.candidate });
+    };
+
+    pc.oniceconnectionstatechange = function() {
+      console.log('[Admin] ICE:', pc.iceConnectionState);
+      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+        usingWebRTC.current = true; setStudentConnected(true);
+      }
+      if (pc.iceConnectionState === 'failed') { usingWebRTC.current = false; try { pc.restartIce(); } catch(er) {} }
+      if (pc.iceConnectionState === 'disconnected') { usingWebRTC.current = false; }
+    };
+
+    try {
+      var offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
+      await pc.setLocalDescription(offer);
+      sock.emit('rtc-offer', { to: studentSocketId, offer: pc.localDescription });
+      console.log('[Admin] WebRTC offer sent to student');
+    } catch(e) { console.warn('[Admin] createOffer failed:', e); }
+  }
+
+  function startCanvasRelay(sock) {
     clearInterval(frameIntervalRef.current);
     var cap = document.createElement('canvas');
-    cap.width = 640; cap.height = 480;
     var ctx = cap.getContext('2d');
     var track = streamRef.current && streamRef.current.getVideoTracks()[0];
-    var ic = (track && window.ImageCapture) ? new ImageCapture(track) : null;
-    var sending = false;
-    var sent = 0;
+
+    var hv = document.createElement('video');
+    hv.muted = true; hv.autoplay = true; hv.playsInline = true;
+    hv.srcObject = streamRef.current;
+    hv.style.cssText = 'position:fixed;width:1px;height:1px;opacity:0.001;pointer-events:none;top:0;left:0';
+    document.body.appendChild(hv);
+    hv.play().catch(function() {});
 
     function sendFrame() {
-      if (!sock.connected || !streamRef.current) return;
-      if (sending) return; // don't pile up
-      sending = true;
-
-      function doSend(src) {
+      if (!sock.connected) return;
+      var w = hv.videoWidth || 320, h = hv.videoHeight || 240;
+      if (cap.width !== w) cap.width = w;
+      if (cap.height !== h) cap.height = h;
+      if (track && window.ImageCapture) {
         try {
-          ctx.drawImage(src, 0, 0, cap.width, cap.height);
-          sock.volatile.emit('video-frame', cap.toDataURL('image/jpeg', 0.5));
-          sent++;
+          new ImageCapture(track).grabFrame().then(function(bmp) {
+            cap.width = bmp.width; cap.height = bmp.height;
+            ctx.drawImage(bmp, 0, 0); bmp.close();
+            sock.volatile.emit('video-frame', cap.toDataURL('image/jpeg', 0.6));
+          }).catch(function() { fromHV(); });
+          return;
         } catch(e) {}
-        sending = false;
       }
+      fromHV();
+    }
 
-      if (ic) {
-        ic.grabFrame().then(doSend).catch(function() {
-          ic = null; // fallback forever
-          var v = videoRef.current;
-          if (v && v.readyState >= 2 && v.videoWidth > 0) doSend(v);
-          else sending = false;
-        });
-      } else {
-        var v = videoRef.current;
-        if (v && v.readyState >= 2 && v.videoWidth > 0) doSend(v);
-        else sending = false;
+    function fromHV() {
+      if (hv.readyState >= 2 && hv.videoWidth > 0) {
+        ctx.drawImage(hv, 0, 0, cap.width, cap.height);
+        sock.volatile.emit('video-frame', cap.toDataURL('image/jpeg', 0.6));
+      } else if (videoRef.current && videoRef.current.readyState >= 2) {
+        ctx.drawImage(videoRef.current, 0, 0, cap.width || 320, cap.height || 240);
+        sock.volatile.emit('video-frame', cap.toDataURL('image/jpeg', 0.6));
       }
     }
 
-    // 15fps
-    frameIntervalRef.current = setInterval(sendFrame, 66);
-    setTimeout(function() { console.log('[Admin] Frames sent:', sent); }, 3000);
+    setTimeout(function() {
+      frameIntervalRef.current = setInterval(sendFrame, 100);
+    }, 1500);
+    frameIntervalRef._hv = hv;
   }
 
-  function startAdminAudio(sock) {
-    if (!streamRef.current) return;
-    if (streamRef.current.getAudioTracks().length === 0) return;
+  function startAudioRelay(sock) {
+    if (!streamRef.current || streamRef.current.getAudioTracks().length === 0) return;
     try {
-      var actx = new (window.AudioContext || window.webkitAudioContext)();
+      var actx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
       var src = actx.createMediaStreamSource(streamRef.current);
       var proc = actx.createScriptProcessor(4096, 1, 1);
       proc.onaudioprocess = function(e) {
-        if (!sock.connected) return;
+        if (!sock.connected || usingWebRTC.current) return;
         sock.volatile.emit('audio-chunk', Array.from(e.inputBuffer.getChannelData(0)));
       };
-      src.connect(proc);
-      proc.connect(actx.destination);
+      src.connect(proc); proc.connect(actx.destination);
       audioProcessorRef.current = { actx, src, proc };
-    } catch(e) { console.warn('[Admin] Audio failed:', e); }
+    } catch(e) { console.warn('[Admin] Audio relay failed:', e); }
   }
 
   function stopFrameRelay() {
     clearInterval(frameIntervalRef.current); frameIntervalRef.current = null;
-    if (audioProcessorRef.current) {
-      try { audioProcessorRef.current.proc.disconnect(); audioProcessorRef.current.src.disconnect(); audioProcessorRef.current.actx.close(); } catch(e) {}
-      audioProcessorRef.current = null;
-    }
+    if (frameIntervalRef._hv) { try { document.body.removeChild(frameIntervalRef._hv); } catch(e) {} frameIntervalRef._hv = null; }
+    if (audioProcessorRef.current) { try { audioProcessorRef.current.proc.disconnect(); audioProcessorRef.current.src.disconnect(); audioProcessorRef.current.actx.close(); } catch(e) {} audioProcessorRef.current = null; }
+    if (pcRef.current) { try { pcRef.current.close(); } catch(e) {} pcRef.current = null; }
+    usingWebRTC.current = false;
   }
 
   async function createOfferForStudent() {} // kept for compatibility
@@ -1213,12 +1267,15 @@ export default function VivaRoom() {
           <div className="card" style={{ padding: 10 }}>
             <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#9ca3af', letterSpacing: 1, marginBottom: 5, textAlign: 'center', fontFamily: 'JetBrains Mono,monospace' }}>🎓 STUDENT</div>
             <div style={{ position: 'relative', borderRadius: 7, overflow: 'hidden', background: '#111', lineHeight: 0 }}>
-              <canvas ref={studentVidRef} width={320} height={240} style={{ width: '100%', height: 130, display: 'block', background: '#111' }}/>
+              {/* WebRTC real video */}
+              <video ref={studentRemoteVid} autoPlay playsInline style={{ width: '100%', height: 130, objectFit: 'cover', display: usingWebRTC.current ? 'block' : 'none' }}/>
+              {/* Canvas relay fallback */}
+              <canvas ref={studentVidRef} width={320} height={240} style={{ width: '100%', height: 130, display: usingWebRTC.current ? 'none' : 'block', background: '#111' }}/>
               <div style={{ position: 'absolute', top: 4, right: 6, background: studentConnected ? 'rgba(22,163,74,.85)' : 'rgba(0,0,0,.6)', color: '#fff', fontSize: '0.6rem', padding: '2px 7px', borderRadius: 10, fontWeight: 700 }}>
-                {studentConnected ? '🟢 Live' : '⏳ Waiting'}
+                {studentConnected ? (usingWebRTC.current ? '🟢 HD Live' : '🟢 Live') : '⏳ Waiting'}
               </div>
             </div>
-            <div style={{ marginTop: 4, fontSize: '0.67rem', color: studentConnected ? '#4ade80' : '#6b7280', textAlign: 'center', fontWeight: 700 }}>{studentConnected ? '🟢 Connected' : '⏳ Waiting…'}</div>
+            <div style={{ marginTop: 4, fontSize: '0.67rem', color: studentConnected ? '#4ade80' : '#6b7280', textAlign: 'center', fontWeight: 700 }}>{studentConnected ? '🟢 Student Connected' : '⏳ Waiting…'}</div>
           </div>
 
           <div className="card" style={{ padding: 12 }}>
