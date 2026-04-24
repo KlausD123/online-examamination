@@ -163,6 +163,10 @@ body {
 }
 .form-textarea { resize: vertical; min-height: 80px; }
 .form-select { cursor: pointer; }
+.form-select option {
+  background: var(--surface);
+  color: var(--text);
+}
 
 /* ========== CARDS ========== */
 .card {

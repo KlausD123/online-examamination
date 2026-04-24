@@ -90,19 +90,21 @@ export async function generateExamQuestions(topic, type, difficulty, count, mark
       existingQuestions.slice(-20).map(function(t){ return t.slice(0,70); }).join(' | ') + '].'
     : '';
 
-  var sys = 'You are an expert exam question generator. Return ONLY a valid JSON array. No markdown. Generate questions DIFFERENT from any previously used.';
+  var randomSeed = Math.floor(Math.random() * 10000);
+  var sys = 'You are an expert exam question generator. Return ONLY a valid JSON array. No markdown. Every generation must produce COMPLETELY DIFFERENT questions even on the same topic — vary the concept, angle, scenario, and phrasing each time.';
   var typeDesc = type === 'MCQ' ? 'multiple choice with 4 options' :
     type === 'TRUE_FALSE' ? 'true/false' :
     type === 'SHORT_ANSWER' ? 'short answer' : 'descriptive';
 
-  var usr = 'Generate ' + count + ' UNIQUE ' + difficulty + ' ' + typeDesc + ' questions on: ' + topic + '.' + excludeStr + ' ' +
-    'Each question has ' + marksEach + ' marks. Each must test a DIFFERENT concept or sub-topic. ' +
-    'Return JSON array. Each object: question_text (string), question_type ("' + type + '"), ' +
+  var usr = 'Generate ' + count + ' UNIQUE ' + difficulty + ' ' + typeDesc + ' questions on: ' + topic + '.' + excludeStr +
+    ' Each question must cover a DIFFERENT sub-topic, scenario or angle. Vary difficulty within the level. Seed variation: ' + randomSeed + '.' +
+    ' Each question has ' + marksEach + ' marks.' +
+    ' Return JSON array. Each object: question_text (string), question_type ("' + type + '"), ' +
     'difficulty ("' + difficulty + '"), marks (' + marksEach + '), correct_answer (string), explanation (string)' +
     (type === 'MCQ' ? ', options (array of 4 strings). correct_answer must exactly match one option.' : '') +
     (type === 'TRUE_FALSE' ? '. correct_answer must be "True" or "False".' : '');
 
-  var raw = await groqChat(sys, usr, 3000, 0.8);
+  var raw = await groqChat(sys, usr, 3000, 0.9);
   return parseJSON(raw);
 }
 
@@ -113,10 +115,12 @@ export async function generateVivaQuestions(topic, count, existingQuestions) {
     ? ' Do NOT repeat or closely paraphrase these existing questions: [' +
       existingQuestions.slice(-15).map(function(q){ return q.slice(0,70); }).join(' | ') + '].'
     : '';
-  var sys = 'You are a viva voce examiner. Return ONLY a JSON array. Always generate questions DIFFERENT from any previously asked.';
+  var rnd = Math.floor(Math.random() * 9999);
+  var sys = 'You are a viva voce examiner. Return ONLY a JSON array. Every call must produce COMPLETELY DIFFERENT questions — vary concepts, angles, depth, and phrasing.';
   var usr = 'Generate ' + count + ' unique oral viva questions on: ' + topic + '.' + excludeStr +
-    ' Each question must test a different concept. Return JSON array: [{"question":"?","model_answer":"2-4 sentence answer"}]';
-  var raw = await groqChat(sys, usr, 2000, 0.75);
+    ' Each question must cover a different sub-topic or approach. Vary between conceptual, applied, and analytical questions. Seed: ' + rnd + '.' +
+    ' Return JSON array: [{"question":"?","model_answer":"2-4 sentence answer"}]';
+  var raw = await groqChat(sys, usr, 2000, 0.9);
   return parseJSON(raw);
 }
 

@@ -50,7 +50,6 @@ export default function Analytics() {
       <div className="page-header" style={{ marginBottom: 24 }}>
         <div>
           <div className="page-title">📈 Analytics</div>
-          <div style={{ fontSize:'0.82rem', color:'var(--text3)', marginTop:3 }}>Exam performance overview across all students</div>
         </div>
       </div>
 

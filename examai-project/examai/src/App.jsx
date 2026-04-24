@@ -40,9 +40,16 @@ var studentNav = [
 
 export default function App() {
   var store = useStore();
-  var [page, setPage] = useState('dashboard');
+  var [page, setPageRaw] = useState(function() {
+    return sessionStorage.getItem('examai_page') || 'dashboard';
+  });
   var [pageData, setPageData] = useState(null);
   var [authChecking, setAuthChecking] = useState(!!localStorage.getItem('examai_token'));
+
+  function setPage(p) {
+    sessionStorage.setItem('examai_page', p);
+    setPageRaw(p);
+  }
 
   useEffect(function() {
     var token = localStorage.getItem('examai_token');
@@ -149,7 +156,7 @@ export default function App() {
               <div style={{ fontSize: '0.7rem', color: 'var(--text3)' }}>{store.currentUser.role}</div>
             </div>
           </div>
-          <button className="topbar-logout" onClick={function() { store.logout(); }}>Logout</button>
+          <button className="topbar-logout" onClick={function() { sessionStorage.removeItem('examai_page'); store.logout(); }}>Logout</button>
         </div>
       </div>
 

@@ -134,8 +134,24 @@ export default function StudentProfile() {
               <div className="form-group">
                 <label className="form-label">Year</label>
                 <select className="form-select" value={year} onChange={function(e) { setYear(e.target.value); }}>
-                  <option>1st Year</option><option>2nd Year</option>
-                  <option>3rd Year</option><option>4th Year</option><option>PG</option>
+                  <option value="1st Year">1st Year</option>
+                  <option value="2nd Year">2nd Year</option>
+                  <option value="3rd Year">3rd Year</option>
+                  <option value="4th Year">4th Year</option>
+                  <option value="PG 1st Year">PG 1st Year</option>
+                  <option value="PG 2nd Year">PG 2nd Year</option>
+                  <option value="Standard 1">Standard 1</option>
+                  <option value="Standard 2">Standard 2</option>
+                  <option value="Standard 3">Standard 3</option>
+                  <option value="Standard 4">Standard 4</option>
+                  <option value="Standard 5">Standard 5</option>
+                  <option value="Standard 6">Standard 6</option>
+                  <option value="Standard 7">Standard 7</option>
+                  <option value="Standard 8">Standard 8</option>
+                  <option value="Standard 9">Standard 9</option>
+                  <option value="Standard 10">Standard 10</option>
+                  <option value="Standard 11">Standard 11</option>
+                  <option value="Standard 12">Standard 12</option>
                 </select>
               </div>
             </div>

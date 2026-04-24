@@ -64,14 +64,16 @@ export default function VivaPractice() {
     setTtsSupport(!!(window.speechSynthesis));
   }, []);
 
-  // ── Generate questions from topic ─────────────────────────
+  // ====================================================
   async function handleStart() {
     if (!topic.trim()) { store.addToast('Enter a topic first', 'error'); return; }
     setLoading(true);
     try {
-      var sys = 'You are a viva examiner. Return ONLY valid JSON array.';
-      var contextPart = topicInfo.trim() ? ' Context: ' + topicInfo.trim().slice(0, 500) : '';
-      var usr = 'Generate ' + numQ + ' viva voce oral exam questions on "' + topic + '".' + contextPart +
+      var vpRnd = Math.floor(Math.random() * 9999);
+      var sys = 'You are a viva examiner. Return ONLY valid JSON array. Always generate COMPLETELY DIFFERENT questions each call — vary concepts, depth and phrasing.';
+      var contextPart = topicInfo.trim() ? ' Context/Notes: ' + topicInfo.trim().slice(0, 800) : '';
+      var usr = 'Generate ' + numQ + ' UNIQUE oral viva questions on "' + topic + '".' + contextPart +
+        ' Each question must test a different aspect. Mix conceptual, applied, and analytical. Seed: ' + vpRnd + '.' +
         ' Return JSON: [{"question":"?","model_answer":"2-4 sentence answer","hint":"1 key point"}]';
       var raw = await groqChat(sys, usr, 2000, 0.7);
       var qs  = parseJSON(raw);
@@ -82,97 +84,192 @@ export default function VivaPractice() {
       setVerdict(null);
       setLiveText('');
       setPhase('practice');
+      // Initialize refs for auto flow
+      questionsRef.current = qs;
+      qIndexRef.current = 0;
+      transcriptRef.current = [];
+      liveTextRef.current = '';
+      flowActive.current = true;
       saveVP({ phase: 'practice', topic, topicInfo, numQ, questions: qs, qIndex: 0, transcript: [], results: null });
-      // Auto-read first question
-      speakText(qs[0].question);
+      // Auto-speak first question then start listening
+      speakText(qs[0].question, function() {
+        if (flowActive.current) startListening();
+      });
     } catch(e) { store.addToast('Failed to generate: ' + e.message, 'error'); }
     setLoading(false);
   }
 
-  // ── TTS: speak question ───────────────────────────────────
-  function speakText(text) {
-    if (!ttsSupport) return;
+  // ====================================================
+  var silenceTimer  = useRef(null);
+  var liveTextRef   = useRef('');
+  var recordingRef  = useRef(false);
+  var qIndexRef     = useRef(0);
+  var transcriptRef = useRef([]);
+  var questionsRef  = useRef([]);
+  var flowActive    = useRef(false);
+
+  function speakText(text, onDone) {
+    if (!synthRef.current) { if (onDone) onDone(); return; }
     synthRef.current.cancel();
-    var utt = new SpeechSynthesisUtterance(text);
-    utt.rate  = 0.9;
-    utt.pitch = 1;
-    utt.onstart = function() { setSpeaking(true); };
-    utt.onend   = function() { setSpeaking(false); };
-    synthRef.current.speak(utt);
     setSpeaking(true);
+    var utt = new SpeechSynthesisUtterance(text);
+    utt.rate = 0.88; utt.pitch = 1.0;
+    utt.onend = function() { setSpeaking(false); if (onDone) onDone(); };
+    utt.onerror = function() { setSpeaking(false); if (onDone) onDone(); };
+    synthRef.current.speak(utt);
   }
 
-  // ── STT: record answer ────────────────────────────────────
-  function startRecording() {
-    if (!SR) { store.addToast('Speech recognition not supported in this browser. Use Chrome.', 'error'); return; }
+  function startListening() {
+    if (!SR) return;
+    liveTextRef.current = '';
+    setLiveText('');
+    setInterimText('');
+    setRecording(true);
+    recordingRef.current = true;
+
     var rec = new SR();
-    rec.continuous     = true;
+    rec.continuous = true;
     rec.interimResults = true;
-    rec.lang           = 'en-US';
+    rec.lang = 'en-US';
+
+    // Reset silence timer every time speech is detected
+    // Trigger phrases that mean "I'm done"
+    var FINAL_PHRASES = [
+      'final answer', 'that is my answer', "that's my answer", 'my final answer',
+      'i am done', "i'm done", 'done', 'submit', 'that is all', "that's all",
+      'end answer', 'final', 'submit answer'
+    ];
+
     rec.onresult = function(e) {
-      var final = '', interim = '';
+      clearTimeout(silenceTimer.current);
+      var finalChunk = '', interim = '';
       for (var i = e.resultIndex; i < e.results.length; i++) {
-        if (e.results[i].isFinal) final += e.results[i][0].transcript + ' ';
+        if (e.results[i].isFinal) finalChunk += e.results[i][0].transcript + ' ';
         else interim += e.results[i][0].transcript;
       }
-      if (final) setLiveText(function(p) { return p + final; });
+      if (finalChunk) {
+        liveTextRef.current += finalChunk;
+        setLiveText(liveTextRef.current);
+        // Check if student said a final-answer phrase
+        var lower = finalChunk.toLowerCase().trim();
+        var saidFinal = FINAL_PHRASES.some(function(p) { return lower.includes(p); });
+        if (saidFinal) {
+          // Remove the trigger phrase from transcript
+          FINAL_PHRASES.forEach(function(p) {
+            liveTextRef.current = liveTextRef.current.replace(new RegExp(p, 'gi'), '').trim();
+          });
+          setLiveText(liveTextRef.current);
+          clearTimeout(silenceTimer.current);
+          setTimeout(function() { if (recordingRef.current) stopListeningAndGrade(); }, 300);
+          return;
+        }
+      }
       setInterimText(interim);
+      // 4 seconds of silence → auto-grade
+      silenceTimer.current = setTimeout(function() {
+        if (recordingRef.current && liveTextRef.current.trim().length > 3) {
+          stopListeningAndGrade();
+        }
+      }, 4000);
     };
-    rec.onend = function() { if (recording) { try { rec.start(); } catch(e) {} } };
-    rec.onerror= function(e) { if (e.error !== 'no-speech') store.addToast('Mic error: ' + e.error, 'error'); };
+
+    rec.onend = function() {
+      if (recordingRef.current) { try { rec.start(); } catch(e2) {} }
+    };
+    rec.onerror = function(e) { if (e.error !== 'no-speech') console.warn('STT error:', e.error); };
     rec.start();
     recRef.current = rec;
-    setRecording(true);
   }
 
-  function stopRecording() {
+  function stopListening() {
+    clearTimeout(silenceTimer.current);
+    recordingRef.current = false;
     setRecording(false);
     setInterimText('');
     if (recRef.current) { try { recRef.current.stop(); } catch(e) {} recRef.current = null; }
   }
 
-  // ── Grade this answer ─────────────────────────────────────
-  async function handleGrade() {
-    if (!liveText.trim()) { store.addToast('Record or type your answer first', 'error'); return; }
-    stopRecording();
+  // Called manually OR after 3s silence
+  async function stopListeningAndGrade() {
+    stopListening();
+    var answer = liveTextRef.current.trim();
+    var qi = qIndexRef.current;
+    var qs = questionsRef.current;
+    if (!qs[qi]) return;
+
     setGrading(true); setVerdict(null);
-    var q = questions[qIndex];
+    var q = qs[qi];
+    var v = null;
     try {
-      var sys = 'You are a strict viva examiner. Return ONLY valid JSON.';
-      var usr = 'Question: ' + q.question + '\nModel Answer: ' + q.model_answer + '\nStudent Answer: ' + liveText +
-        '\nReturn: {"correct":true/false,"score_pct":0-100,"verdict":"Correct/Partially Correct/Incorrect","feedback":"2-3 sentences","missing":"key point they missed or None"}';
+      var sys = 'You are an experienced oral viva examiner. Grade spoken student answers fairly. Students speak conversationally and may use different words than the model answer — that is fine. Judge whether the student understands the CONCEPT, not whether they matched exact words. A short clear answer showing understanding should score well. Return ONLY valid JSON.';
+      var usr = 'Question: ' + q.question +
+        '\nModel Answer (reference only — student does not need to match this exactly): ' + q.model_answer +
+        '\nStudent Spoken Answer: ' + (answer || '(no answer)') +
+        '\nEvaluate: Does the student demonstrate understanding of the core concept? Did they cover the key idea(s) even if briefly?' +
+        '\nReturn: {"correct":true/false,"score_pct":0-100,"verdict":"Correct/Partially Correct/Incorrect","feedback":"2-3 encouraging sentences explaining what was good and what was missing","missing":"key concept they missed, or None if answer was sufficient"}';
       var raw = await groqChat(sys, usr, 400, 0.3);
-      var v   = parseJSON(raw);
+      v = parseJSON(raw);
       setVerdict(v);
-    } catch(e) { store.addToast('Grading failed', 'error'); }
+    } catch(e) { v = { correct: false, score_pct: 0, verdict: 'Error', feedback: 'Grading failed', missing: '' }; }
     setGrading(false);
+
+    // Save to transcript
+    var entry = { question: q.question, model_answer: q.model_answer, student_said: answer, verdict: v };
+    var newT = transcriptRef.current.concat([entry]);
+    transcriptRef.current = newT;
+    setTranscript(newT);
+
+    // Speak feedback then move to next question
+    var feedbackText = (v && v.verdict ? v.verdict + '. ' : '') + (v && v.feedback ? v.feedback : '');
+    speakText(feedbackText, function() {
+      var isLast = qi >= qs.length - 1;
+      if (isLast) {
+        flowActive.current = false;
+        endSession(newT);
+      } else {
+        // Next question
+        var nextIdx = qi + 1;
+        qIndexRef.current = nextIdx;
+        setQIndex(nextIdx);
+        setLiveText(''); liveTextRef.current = '';
+        setVerdict(null);
+        // Speak next question then start listening
+        speakText(qs[nextIdx].question, function() {
+          if (flowActive.current) startListening();
+        });
+      }
+    });
   }
 
-  // ── Save and go to next question ──────────────────────────
+  // ====================================================
+  function startRecording() { startListening(); }
+  function stopRecording() { stopListening(); }
+  function handleGrade() { stopListeningAndGrade(); }
+
   function handleNext() {
-    var q = questions[qIndex];
-    var entry = {
-      question:     q.question,
-      model_answer: q.model_answer,
-      student_said: liveText.trim(),
-      verdict:      verdict,
-    };
-    var newT = transcript.concat([entry]);
+    // Manual next (if user wants to skip)
+    stopListening();
+    var qi = qIndexRef.current;
+    var qs = questionsRef.current;
+    var answer = liveTextRef.current.trim();
+    var entry = { question: qs[qi].question, model_answer: qs[qi].model_answer, student_said: answer, verdict: verdict };
+    var newT = transcriptRef.current.concat([entry]);
+    transcriptRef.current = newT;
     setTranscript(newT);
     synthRef.current && synthRef.current.cancel();
-    var isLast = qIndex >= questions.length - 1;
-    if (isLast) {
-      endSession(newT);
-    } else {
-      setQIndex(qIndex + 1);
-      setLiveText('');
-      setInterimText('');
-      setVerdict(null);
-      speakText(questions[qIndex + 1].question);
-    }
+    var isLast = qi >= qs.length - 1;
+    if (isLast) { flowActive.current = false; endSession(newT); return; }
+    var nextIdx = qi + 1;
+    qIndexRef.current = nextIdx;
+    setQIndex(nextIdx);
+    setLiveText(''); liveTextRef.current = '';
+    setVerdict(null);
+    speakText(qs[nextIdx].question, function() {
+      if (flowActive.current) startListening();
+    });
   }
 
-  // ── End & generate full analysis ─────────────────────────
+  // ====================================================
   async function endSession(finalTranscript) {
     synthRef.current && synthRef.current.cancel();
     stopRecording();
@@ -229,25 +326,27 @@ export default function VivaPractice() {
   }
 
   function resetAll() {
+    flowActive.current = false;
+    clearTimeout(silenceTimer.current);
     synthRef.current && synthRef.current.cancel();
-    stopRecording();
+    stopListening();
     clearVP();
     setPhaseRaw('setup'); setTopic(''); setTopicInfo(''); setQuestions([]); setQIndex(0);
     setTranscript([]); setVerdict(null); setLiveText(''); setResults(null);
+    liveTextRef.current = ''; qIndexRef.current = 0; transcriptRef.current = []; questionsRef.current = [];
   }
 
   var gc = function(g) { return g==='A+'||g==='A'?'#16a34a':g==='F'?'#dc2626':g==='B'?'#2563eb':'#d97706'; };
   var gb = function(g) { return g==='A+'||g==='A'?'#dcfce7':g==='F'?'#fee2e2':g==='B'?'#dbeafe':'#fef3c7'; };
 
-  // ════════════════════════════════════════════════════════════
+  // ====================================================
   // SETUP PHASE
-  // ════════════════════════════════════════════════════════════
+  // ====================================================
   if (phase === 'setup') return (
     <div className="fade-up">
       <div className="page-header">
         <div>
           <div className="page-title">🎙 Viva Practice</div>
-          <div className="page-subtitle">AI oral exam practice with speech recognition</div>
         </div>
       </div>
 
@@ -260,7 +359,7 @@ export default function VivaPractice() {
 
       <div style={{ maxWidth: 600 }}>
         <div className="card" style={{ marginBottom: 20 }}>
-          <div className="card-title" style={{ marginBottom: 16 }}>📚 Session Setup</div>
+          <div style={{ fontWeight: 700, fontSize: '1.1rem', marginBottom: 16 }}>Session Setup</div>
 
           <div className="form-group">
             <label className="form-label">Topic *</label>
@@ -269,8 +368,19 @@ export default function VivaPractice() {
 
           <div className="form-group">
             <label className="form-label">Topic Notes / Syllabus (optional)</label>
-            <textarea className="form-textarea" value={topicInfo} onChange={function(e){setTopicInfo(e.target.value);}} rows={4} placeholder="Paste your notes, syllabus, or key concepts here. AI will generate questions based on this content..."/>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text3)', marginTop: 4 }}>The more context you provide, the more relevant the questions will be.</div>
+            <textarea className="form-textarea" value={topicInfo} onChange={function(e){setTopicInfo(e.target.value);}} rows={4} placeholder="Paste your notes, syllabus, or key concepts here..."/>
+            <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 12px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer', fontSize: '0.8rem', color: 'var(--text2)' }}>
+                📄 Upload PDF/Text
+                <input type="file" accept=".pdf,.txt" style={{ display: 'none' }} onChange={function(e) {
+                  var file = e.target.files[0]; if (!file) return;
+                  var reader = new FileReader();
+                  reader.onload = function(ev) { setTopicInfo(function(prev) { return (prev ? prev + '\n' : '') + ev.target.result.slice(0, 3000); }); };
+                  reader.readAsText(file); e.target.value = '';
+                }}/>
+              </label>
+              <span style={{ fontSize: '0.72rem', color: 'var(--text3)' }}>or paste text above</span>
+            </div>
           </div>
 
           <div className="form-group">
@@ -287,44 +397,20 @@ export default function VivaPractice() {
             </div>
           </div>
 
-          <div style={{ padding: '12px 14px', background: 'var(--surface2)', borderRadius: 8, marginBottom: 20, fontSize: '0.85rem', color: 'var(--text2)' }}>
-            <strong>How it works:</strong><br/>
-            1. AI generates {numQ} viva questions based on your topic<br/>
-            2. Each question is read aloud (Text-to-Speech)<br/>
-            3. Speak your answer (or type it) — AI grades your response<br/>
-            4. Results saved separately from your exam scores
-          </div>
-
           <button className="btn btn-primary btn-lg" onClick={handleStart} disabled={loading || !topic.trim()}
-            style={{ width: '100%', justifyContent: 'center' }}>
+            style={{ width: '100%', justifyContent: 'center', marginBottom: 20 }}>
             {loading ? <><div className="spinner" style={{width:18,height:18}}></div> Generating Questions...</> : '🚀 Start Viva Practice'}
           </button>
         </div>
 
-        {/* Features */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          {[
-            { icon: '🎤', title: 'Speech Recognition', desc: ttsSupport ? 'Speak your answer — auto-transcribed' : 'Type your answers manually' },
-            { icon: '🔊', title: 'Text-to-Speech', desc: ttsSupport ? 'Questions read aloud automatically' : 'Not supported in this browser' },
-            { icon: '🤖', title: 'AI Grading', desc: 'Instant verdict with detailed feedback' },
-            { icon: '📊', title: 'Practice Analytics', desc: 'Results in My Results (not in exam score)' },
-          ].map(function(f, i) {
-            return (
-              <div key={i} className="card" style={{ padding: '14px 16px' }}>
-                <div style={{ fontSize: '1.5rem', marginBottom: 6 }}>{f.icon}</div>
-                <div style={{ fontWeight: 600, fontSize: '0.9rem', marginBottom: 3 }}>{f.title}</div>
-                <div style={{ fontSize: '0.78rem', color: 'var(--text3)' }}>{f.desc}</div>
-              </div>
-            );
-          })}
-        </div>
+
       </div>
     </div>
   );
 
-  // ════════════════════════════════════════════════════════════
+  // ====================================================
   // PRACTICE PHASE
-  // ════════════════════════════════════════════════════════════
+  // ====================================================
   if (phase === 'practice') {
     var q = questions[qIndex];
     var answered = transcript.length;
@@ -349,7 +435,7 @@ export default function VivaPractice() {
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 20 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           {/* Main area */}
           <div>
             {/* Question card */}
@@ -374,37 +460,41 @@ export default function VivaPractice() {
             <div className="card" style={{ marginBottom: 16 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                 <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
-                  {recording && <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#dc2626', display: 'inline-block', animation: 'pulse 1s infinite' }}/>}
-                  {recording ? '🎤 Recording...' : '📝 Your Answer'}
+                  {speaking  && <><span style={{ width:8,height:8,borderRadius:'50%',background:'#7c3aed',display:'inline-block',animation:'pulse 1s infinite' }}/> 🔊 AI Speaking…</>}
+                  {recording && !grading && <><span style={{ width:8,height:8,borderRadius:'50%',background:'#dc2626',display:'inline-block',animation:'pulse 1s infinite' }}/> 🎤 Listening…</>}
+                  {grading   && <><div className="spinner" style={{width:12,height:12,display:'inline-block'}}/> ⚡ Grading…</>}
+                  {!speaking && !recording && !grading && verdict && <>✅ Graded — AI feedback playing…</>}
+                  {!speaking && !recording && !grading && !verdict && <>📝 Your Answer</>}
                 </div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  {srSupport && !recording && (
-                    <button className="btn btn-primary btn-sm" onClick={startRecording}>🎤 Start Speaking</button>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {!recording && !speaking && !grading && !verdict && (
+                    <button className="btn btn-primary btn-sm" onClick={function(){flowActive.current=true; startListening();}}>🎤 Start</button>
                   )}
                   {recording && (
-                    <button className="btn btn-danger btn-sm" onClick={stopRecording}>⏸ Stop</button>
+                    <button className="btn btn-warning btn-sm" onClick={function(){stopListeningAndGrade();}}>✋ Grade Now</button>
+                  )}
+                  {verdict && !grading && !speaking && (
+                    <button className="btn btn-success btn-sm" onClick={handleNext}>Next →</button>
                   )}
                 </div>
               </div>
 
-              <div style={{ minHeight: 100, padding: '10px 14px', background: 'var(--surface2)', borderRadius: 8, border: '1.5px solid ' + (recording ? 'var(--accent)' : 'var(--border)'), fontSize: '0.95rem', lineHeight: 1.65, color: 'var(--text)', position: 'relative', transition: 'var(--transition)' }}>
+              <div style={{ minHeight: 100, padding: '10px 14px', background: 'var(--surface2)', borderRadius: 8, border: '1.5px solid ' + (recording ? '#dc2626' : speaking ? '#7c3aed' : 'var(--border)'), fontSize: '0.95rem', lineHeight: 1.65, color: 'var(--text)', position: 'relative', transition: 'var(--transition)' }}>
                 {liveText || <span style={{ color: 'var(--text3)', fontStyle: 'italic' }}>
-                  {recording ? 'Speak now...' : 'Click "Start Speaking" or type below'}
+                  {speaking ? 'Listen to the question…' : recording ? 'Speak your answer now…' : 'Your answer will appear here as you speak'}
                 </span>}
                 {interimText && <span style={{ color: 'var(--text3)', fontStyle: 'italic' }}> {interimText}</span>}
               </div>
 
-              {/* Manual text input fallback */}
-              <div style={{ marginTop: 10 }}>
-                <textarea className="form-textarea" rows={3} value={liveText} onChange={function(e){setLiveText(e.target.value);}} placeholder="Or type your answer here..." style={{ fontSize: '0.9rem' }}/>
-              </div>
-
-              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                <button className="btn btn-outline btn-sm" onClick={function(){setLiveText('');setInterimText('');setVerdict(null);}}>🔄 Clear</button>
-                <button className="btn btn-warning btn-sm" onClick={handleGrade} disabled={grading || !liveText.trim()}>
-                  {grading ? <><div className="spinner" style={{width:12,height:12}}></div> Grading...</> : '⚡ Grade My Answer'}
-                </button>
-              </div>
+              {/* Type fallback */}
+              {!recording && !speaking && !grading && (
+                <div style={{ marginTop: 8 }}>
+                  <textarea className="form-textarea" rows={2} value={liveText} onChange={function(e){setLiveText(e.target.value); liveTextRef.current=e.target.value;}} placeholder="Or type your answer here…" style={{ fontSize: '0.88rem' }}/>
+                  {liveText.trim() && !verdict && (
+                    <button className="btn btn-warning btn-sm" style={{ marginTop: 6 }} onClick={function(){stopListeningAndGrade();}} disabled={grading}>⚡ Grade Typed Answer</button>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Verdict */}
@@ -472,9 +562,9 @@ export default function VivaPractice() {
     );
   }
 
-  // ════════════════════════════════════════════════════════════
+  // ====================================================
   // RESULTS PHASE
-  // ════════════════════════════════════════════════════════════
+  // ====================================================
   var finalCorrect = (results && results.correct) || 0;
   var finalTotal   = (results && results.total)   || 0;
   var finalGrade   = (results && results.grade)   || 'F';

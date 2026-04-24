@@ -27,7 +27,6 @@ export default function StudentDashboard({ navigate }) {
       <div className="page-header">
         <div>
           <div className="page-title">👋 Hello, {store.currentUser.name}!</div>
-          <div className="page-subtitle">Ready for your next challenge?</div>
         </div>
       </div>
       <div className="stats-grid">
@@ -76,7 +75,7 @@ export default function StudentDashboard({ navigate }) {
         </button>
         <button className="card" style={{ cursor: 'pointer', textAlign: 'center', border: '2px dashed var(--border)' }} onClick={function() { navigate('practice'); }}>
           <div style={{ fontSize: '2rem', marginBottom: 8 }}>🎯</div>
-          <div style={{ fontWeight: 600 }}>Practice Zone</div>
+          <div style={{ fontWeight: 600 }}>Practice</div>
         </button>
         <button className="card" style={{ cursor: 'pointer', textAlign: 'center', border: '2px dashed var(--border)' }} onClick={function() { navigate('viva'); }}>
           <div style={{ fontSize: '2rem', marginBottom: 8 }}>🎙</div>

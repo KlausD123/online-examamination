@@ -353,7 +353,7 @@ export default function PracticeZone() {
         autoFocus
       />
       <div style={{ fontSize:11, color:'#9ca3af', marginTop:7, fontFamily:'JetBrains Mono,monospace' }}>
-        Type any subject or topic. AI will generate questions on it.
+        Type any subject or topic to get practice questions.
       </div>
     </div>
   );
@@ -361,13 +361,12 @@ export default function PracticeZone() {
   // ── HUB ──────────────────────────────────────────────────
   if (screen === 'hub') return (
     <div className="fade-up">
-      <h1 style={{ fontFamily:'Space Grotesk,sans-serif', fontWeight:800, fontSize:26, color:'#0f0f1a', marginBottom:4 }}>Practice Zone</h1>
-      <p style={{ fontSize:13, color:'#6b7280', marginBottom:28, fontFamily:'JetBrains Mono,monospace' }}>Build your skills with AI-generated questions</p>
+      <h1 style={{ fontFamily:'Space Grotesk,sans-serif', fontWeight:800, fontSize:26, color:'#0f0f1a', marginBottom:4 }}>Practice</h1>
       <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:20 }}>
         {[
-          { icon:'🎯', title:'Adaptive Testing', desc:'Questions adapt to your skill level in real-time using ELO scoring. Gets harder when you are right, easier when you are wrong.', color:'#6d28d9', bg:'#f5f3ff', border:'#ddd6fe', tags:['ELO System','Real-time Adaptation','Skill Detection'], action:() => setScreen('adaptive-setup') },
-          { icon:'📝', title:'Standard Practice', desc:'Classic MCQ practice at a fixed difficulty. Choose subject, difficulty, and any number of questions — 10, 50, 100 or more.', color:'#16a34a', bg:'#f0fdf4', border:'#bbf7d0', tags:['Fixed Difficulty','Custom Count','Full Review'], action:() => setScreen('standard-setup') },
-          { icon:'✍️', title:'Written Practice', desc:'Short-answer questions that test deep understanding. Type your answer, then Groq AI grades it and provides detailed feedback.', color:'#0369a1', bg:'#f0f9ff', border:'#bae6fd', tags:['Short Answer','AI Graded','Deep Understanding'], action:() => setScreen('written-setup') },
+          { icon:'🎯', title:'Adaptive Testing', desc:'Questions get harder when you answer correctly, easier when you answer incorrectly.', color:'#6d28d9', bg:'#f5f3ff', border:'#ddd6fe', tags:['Adaptive','Skill-based'], action:() => setScreen('adaptive-setup') },
+          { icon:'📝', title:'Standard Practice', desc:'Multiple choice questions at a fixed difficulty. Choose subject, difficulty, and number of questions.', color:'#16a34a', bg:'#f0fdf4', border:'#bbf7d0', tags:['Multiple Choice','Custom Count'], action:() => setScreen('standard-setup') },
+          { icon:'✍️', title:'Written Practice', desc:'Short-answer questions that test deep understanding. Type your answer and get instant feedback.', color:'#0369a1', bg:'#f0f9ff', border:'#bae6fd', tags:['Short Answer','Deep Understanding'], action:() => setScreen('written-setup') },
         ].map(card => (
           <div key={card.title} onClick={card.action}
             style={{ background:card.bg, border:'1.5px solid ' + card.border, borderRadius:16, padding:28, cursor:'pointer', transition:'all .2s' }}

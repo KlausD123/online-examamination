@@ -153,7 +153,6 @@ export default function ResultView({ submission, onBack }) {
               </div>
               {analysis.improvements && <div style={{ marginTop: 16 }}><div style={{ fontWeight: 700, marginBottom: 8 }}>📈 Improvement Steps</div>{analysis.improvements.map(function(s, i) { return <div key={i} style={{ fontSize: '0.85rem', padding: '4px 0' }}>{i + 1}. {s}</div>; })}</div>}
               {analysis.focus_topics && <div style={{ marginTop: 16, display: 'flex', gap: 8, flexWrap: 'wrap' }}><span style={{ fontWeight: 600, fontSize: '0.85rem' }}>🎯 Focus Topics:</span>{analysis.focus_topics.map(function(t, i) { return <span key={i} className="badge badge-warning">{t}</span>; })}</div>}
-              <button className="btn btn-outline" style={{ marginTop: 16 }} onClick={function() { setAnalysis(null); }}>🔄 Re-analyze</button>
             </div>
           )}
         </div>

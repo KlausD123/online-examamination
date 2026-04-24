@@ -240,16 +240,24 @@ export default function CreateExam({ navigate, editExam }) {
             <div className="form-group"><label className="form-label">Title</label><input className="form-input" value={title} onChange={function(e) { setTitle(e.target.value); }} required /></div>
             <div className="form-group"><label className="form-label">Description</label><textarea className="form-textarea" value={description} onChange={function(e) { setDescription(e.target.value); }} /></div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-              <div className="form-group"><label className="form-label">Duration (min)</label><input className="form-input" type="number" value={duration} onChange={function(e) { setDuration(Number(e.target.value)); }} min={1} /></div>
-              <div className="form-group"><label className="form-label">Total Marks</label><input className="form-input" type="number" value={totalMarks} onChange={function(e) { setTotalMarks(Number(e.target.value)); }} min={1} /></div>
+              <div className="form-group"><label className="form-label">Duration (minutes)</label><input className="form-input" type="number" value={duration} onChange={function(e) { setDuration(e.target.value === '' ? '' : Number(e.target.value)); }} min={1} placeholder="60" /></div>
+              <div className="form-group"><label className="form-label">Total Marks</label><input className="form-input" type="number" value={totalMarks} onChange={function(e) { setTotalMarks(e.target.value === '' ? '' : Number(e.target.value)); }} min={1} placeholder="100" /></div>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-              <div className="form-group"><label className="form-label">Start Time</label><input className="form-input" type="datetime-local" value={startTime} onChange={function(e) { setStartTime(e.target.value); }} /></div>
-              <div className="form-group"><label className="form-label">End Time</label><input className="form-input" type="datetime-local" value={endTime} onChange={function(e) { setEndTime(e.target.value); }} /></div>
+              <div className="form-group">
+                <label className="form-label">Start Date &amp; Time <span style={{ fontSize:'0.72rem', color:'var(--text3)', fontWeight:400 }}>(students can access from this time)</span></label>
+                <input className="form-input" type="datetime-local" value={startTime} onChange={function(e) { setStartTime(e.target.value); }} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">End Date &amp; Time <span style={{ fontSize:'0.72rem', color:'var(--text3)', fontWeight:400 }}>(exam hidden after this time)</span></label>
+                <input className="form-input" type="datetime-local" value={endTime} onChange={function(e) { setEndTime(e.target.value); }} />
+              </div>
             </div>
-            <div style={{ padding: 12, background: 'var(--accent-glow)', borderRadius: 8, marginBottom: 16, fontSize: '0.85rem', color: 'var(--accent)' }}>
-              📋 You are creating a <strong>{totalMarks}-mark</strong> exam — questions must total exactly {totalMarks} marks
-            </div>
+            {startTime && endTime && (
+              <div style={{ padding:'8px 12px', background:'rgba(124,58,237,.08)', borderRadius:8, fontSize:'0.82rem', color:'var(--accent)', marginBottom:12 }}>
+                📅 Exam visible from <strong>{new Date(startTime).toLocaleString()}</strong> to <strong>{new Date(endTime).toLocaleString()}</strong>
+              </div>
+            )}
             <button className="btn btn-primary" disabled={loading}>{loading ? 'Creating...' : 'Create & Add Questions →'}</button>
           </form>
         </div>
@@ -277,8 +285,22 @@ export default function CreateExam({ navigate, editExam }) {
 
           {qTab === 'ai' && (
             <div className="card">
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 12 }}>
-                <div className="form-group"><label className="form-label">Topic</label><input className="form-input" value={aiTopic} onChange={function(e) { setAiTopic(e.target.value); }} placeholder="e.g. Data Structures" /></div>
+              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr', gap: 12 }}>
+                <div className="form-group">
+                  <label className="form-label">Topic / Notes</label>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <input className="form-input" value={aiTopic} onChange={function(e) { setAiTopic(e.target.value); }} placeholder="e.g. Data Structures or paste notes" style={{ flex: 1 }}/>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '0 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', cursor: 'pointer', fontSize: '0.78rem', color: 'var(--text2)', whiteSpace: 'nowrap' }}>
+                      📄 PDF
+                      <input type="file" accept=".pdf,.txt" style={{ display: 'none' }} onChange={function(e) {
+                        var file = e.target.files[0]; if (!file) return;
+                        var reader = new FileReader();
+                        reader.onload = function(ev) { setAiTopic(function(prev) { return (prev ? prev + '\n' : '') + ev.target.result.slice(0, 2000); }); };
+                        reader.readAsText(file); e.target.value = '';
+                      }}/>
+                    </label>
+                  </div>
+                </div>
                 <div className="form-group"><label className="form-label">Type</label><select className="form-select" value={aiType} onChange={function(e) { setAiType(e.target.value); }}><option>MCQ</option><option>TRUE_FALSE</option><option>SHORT_ANSWER</option><option>DESCRIPTIVE</option></select></div>
                 <div className="form-group"><label className="form-label">Difficulty</label><select className="form-select" value={aiDiff} onChange={function(e) { setAiDiff(e.target.value); }}><option>Easy</option><option>Medium</option><option>Hard</option></select></div>
                 <div className="form-group"><label className="form-label">Count</label><input className="form-input" type="number" value={aiCount} onChange={function(e) { setAiCount(Number(e.target.value)); }} min={1} max={20} /></div>

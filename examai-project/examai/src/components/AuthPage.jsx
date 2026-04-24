@@ -47,7 +47,6 @@ export default function AuthPage() {
           <span style={{ fontSize: '2.5rem' }}>🎓</span>
         </div>
         <div className="auth-title">DExam</div>
-        <div className="auth-subtitle">AI-Powered Examination Platform</div>
 
         <div className="tabs" style={{ borderColor: 'rgba(255,255,255,0.1)' }}>
           <button className={'tab-btn' + (tab === 'login' ? ' active' : '')} onClick={function() { setTab('login'); setError(''); }} style={{ color: tab === 'login' ? '#a78bfa' : '#6b7280' }}>Login</button>
@@ -101,6 +100,20 @@ export default function AuthPage() {
                   <option value="2nd Year">2nd Year</option>
                   <option value="3rd Year">3rd Year</option>
                   <option value="4th Year">4th Year</option>
+                  <option value="PG 1st Year">PG 1st Year</option>
+                  <option value="PG 2nd Year">PG 2nd Year</option>
+                  <option value="Standard 1">Standard 1</option>
+                  <option value="Standard 2">Standard 2</option>
+                  <option value="Standard 3">Standard 3</option>
+                  <option value="Standard 4">Standard 4</option>
+                  <option value="Standard 5">Standard 5</option>
+                  <option value="Standard 6">Standard 6</option>
+                  <option value="Standard 7">Standard 7</option>
+                  <option value="Standard 8">Standard 8</option>
+                  <option value="Standard 9">Standard 9</option>
+                  <option value="Standard 10">Standard 10</option>
+                  <option value="Standard 11">Standard 11</option>
+                  <option value="Standard 12">Standard 12</option>
                 </select>
               </div>
             </div>

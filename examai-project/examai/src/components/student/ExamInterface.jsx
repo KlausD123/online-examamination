@@ -100,6 +100,36 @@ export default function ExamInterface({ exam, submissionId, onComplete }) {
       setCamOn(true);
       setMicOn(true);
 
+      // Monitor if student turns off camera/mic — auto recover
+      stream.getVideoTracks().forEach(function(track) {
+        track.onended = function() {
+          setCamOn(false);
+          triggerViolation('Camera was turned off during the exam');
+          // Auto-recover after 3s
+          setTimeout(function() {
+            navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+              .then(function(newStream) {
+                newStream.getVideoTracks().forEach(function(t) { streamRef.current.addTrack(t); });
+                if (videoRef.current) videoRef.current.srcObject = streamRef.current;
+                setCamOn(true);
+              }).catch(function(){});
+          }, 3000);
+        };
+      });
+      stream.getAudioTracks().forEach(function(track) {
+        track.onended = function() {
+          setMicOn(false);
+          triggerViolation('Microphone was turned off during the exam');
+          setTimeout(function() {
+            navigator.mediaDevices.getUserMedia({ video: false, audio: true })
+              .then(function(newStream) {
+                newStream.getAudioTracks().forEach(function(t) { streamRef.current.addTrack(t); });
+                setMicOn(true);
+              }).catch(function(){});
+          }, 3000);
+        };
+      });
+
       // Attach video element
       var iv = setInterval(function () {
         if (videoRef.current) {
@@ -287,14 +317,28 @@ export default function ExamInterface({ exam, submissionId, onComplete }) {
         var rmsSum = 0;
         for (var k = 0; k < timeData.length; k++) { var s=(timeData[k]/128.0)-1.0; rmsSum+=s*s; }
         var rms = Math.sqrt(rmsSum / timeData.length);
-        // Sustained voice-range loudness = possible multiple people talking
-        if (voiceAvg > 80 || rms > 0.40) { // HIGH thresholds — only real sustained noise
+        // Multiple voices detection: look for complex frequency pattern
+        // Multiple people = multiple fundamental frequencies simultaneously
+        var voiceBands = [0, 0, 0, 0]; // 85-250Hz, 250-500Hz, 500-2000Hz, 2000-4000Hz
+        var binHz = ctx.sampleRate / analyser.fftSize;
+        for (var b = 0; b < freqData.length; b++) {
+          var hz = b * binHz;
+          if (hz >= 85  && hz < 250)  voiceBands[0] += freqData[b];
+          if (hz >= 250 && hz < 500)  voiceBands[1] += freqData[b];
+          if (hz >= 500 && hz < 2000) voiceBands[2] += freqData[b];
+          if (hz >= 2000 && hz < 4000) voiceBands[3] += freqData[b];
+        }
+        // Normalize bands
+        var activeBands = voiceBands.filter(function(v) { return v > 3000; }).length;
+        // Multiple active voice bands + high overall level = multiple voices
+        var multipleVoices = (activeBands >= 3 && voiceAvg > 60) || rms > 0.45;
+        if (multipleVoices) {
           loudFramesRef.current++;
-          if (loudFramesRef.current >= 20) { // ~4s sustained loud noise
+          if (loudFramesRef.current >= 15) { // ~3s sustained
             loudFramesRef.current = 0;
             setVoiceAlert(true);
-            setTimeout(function () { setVoiceAlert(false); }, 3500);
-            triggerViolation('Loud voice detected — possible multiple people talking');
+            setTimeout(function () { setVoiceAlert(false); }, 4000);
+            triggerViolation('Multiple voices detected in the environment');
           }
         } else {
           loudFramesRef.current = Math.max(0, loudFramesRef.current - 1);
@@ -432,6 +476,13 @@ export default function ExamInterface({ exam, submissionId, onComplete }) {
 
   return (
     <div className="fade-up" style={{ maxWidth:1060, margin:'0 auto' }}>
+
+      {/* Camera/Mic off warning — cannot be dismissed */}
+      {(!camOn || !micOn) && (
+        <div style={{ position:'fixed', top:0, left:0, right:0, zIndex:9999, background:'#dc2626', color:'#fff', textAlign:'center', padding:'8px 16px', fontWeight:700, fontSize:'0.85rem', display:'flex', alignItems:'center', justifyContent:'center', gap:10 }}>
+          ⚠️ {!camOn && !micOn ? 'Camera and microphone are off' : !camOn ? 'Camera is off' : 'Microphone is off'} — this is a violation. Restoring automatically…
+        </div>
+      )}
 
       {/* Voice alert flash */}
       {voiceAlert && (

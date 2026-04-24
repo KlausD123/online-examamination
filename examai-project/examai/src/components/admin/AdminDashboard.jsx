@@ -17,7 +17,6 @@ export default function AdminDashboard({ navigate }) {
       <div className="page-header">
         <div>
           <div className="page-title">👋 Welcome back, {store.currentUser.name}</div>
-          <div className="page-subtitle">Here's your examination platform overview</div>
         </div>
         <button className="btn btn-primary" onClick={function() { navigate('create'); }}>+ Create Exam</button>
       </div>
@@ -82,17 +81,14 @@ export default function AdminDashboard({ navigate }) {
         <button className="card" style={{ cursor: 'pointer', textAlign: 'center', border: '2px dashed var(--border)' }} onClick={function() { navigate('create'); }}>
           <div style={{ fontSize: '2rem', marginBottom: 8 }}>✨</div>
           <div style={{ fontWeight: 600 }}>Create New Exam</div>
-          <div style={{ fontSize: '0.8rem', color: 'var(--text3)', marginTop: 4 }}>AI-powered question generation</div>
         </button>
         <button className="card" style={{ cursor: 'pointer', textAlign: 'center', border: '2px dashed var(--border)' }} onClick={function() { navigate('viva'); }}>
           <div style={{ fontSize: '2rem', marginBottom: 8 }}>🎙</div>
           <div style={{ fontWeight: 600 }}>Start Viva Room</div>
-          <div style={{ fontSize: '0.8rem', color: 'var(--text3)', marginTop: 4 }}>Live oral examination</div>
         </button>
         <button className="card" style={{ cursor: 'pointer', textAlign: 'center', border: '2px dashed var(--border)' }} onClick={function() { navigate('analytics'); }}>
           <div style={{ fontSize: '2rem', marginBottom: 8 }}>📈</div>
           <div style={{ fontWeight: 600 }}>View Analytics</div>
-          <div style={{ fontSize: '0.8rem', color: 'var(--text3)', marginTop: 4 }}>Detailed insights</div>
         </button>
       </div>
     </div>

@@ -118,81 +118,61 @@ export default function AvailableExams({ navigate }) {
     return React.createElement(ResultView, { submission: viewResult, onBack: function() { setViewResult(null); } });
   }
 
-  // ── Camera/Mic Pre-Check Screen ──────────────────────────────
+  // ── Camera/Mic Pre-Check Screen — compact ──────────────────
   if (checkingExam) {
     var granted  = permState === 'granted';
     var checking = permState === 'checking';
     var blocked  = permState === 'denied' || permState === 'no_device';
     return (
-      <div className="fade-up" style={{ maxWidth: 520, margin: '40px auto' }}>
-        <div style={{ textAlign: 'center', marginBottom: 28 }}>
-          <div style={{ fontSize: '2.8rem', marginBottom: 10 }}>📷</div>
-          <div style={{ fontFamily: 'Space Grotesk,sans-serif', fontWeight: 800, fontSize: '1.4rem', marginBottom: 8 }}>
-            Camera &amp; Microphone Required
+      <div className="fade-up" style={{ maxWidth: 480, margin: '32px auto' }}>
+        <div className="card" style={{ padding: 24 }}>
+          <div style={{ fontWeight: 700, fontSize: '1.1rem', marginBottom: 4 }}>
+            📷 Camera &amp; Microphone Required
           </div>
-          <div style={{ fontSize: '0.88rem', color: 'var(--text3)', lineHeight: 1.65 }}>
-            <strong style={{ color: 'var(--text2)' }}>{checkingExam.title}</strong> requires your camera and microphone for proctoring. They must stay on for the full exam.
+          <div style={{ fontSize: '0.82rem', color: 'var(--text3)', marginBottom: 16 }}>
+            You cannot start <strong>{checkingExam.title}</strong> without camera and microphone access. Both must stay active throughout the exam.
           </div>
-        </div>
 
-        {/* Device status cards */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 18 }}>
-          {[{ icon: '📷', label: 'Camera' }, { icon: '🎤', label: 'Microphone' }].map(function(item) {
-            return (
-              <div key={item.label} className="card" style={{ textAlign: 'center', padding: '18px 12px', borderLeft: '3px solid ' + (granted ? 'var(--success)' : blocked ? 'var(--danger)' : 'var(--border)') }}>
-                <div style={{ fontSize: '2rem', marginBottom: 6 }}>{granted ? '✅' : blocked ? '❌' : item.icon}</div>
-                <div style={{ fontWeight: 700, fontSize: '0.88rem' }}>{item.label}</div>
-                <div style={{ fontSize: '0.73rem', color: granted ? 'var(--success)' : blocked ? 'var(--danger)' : 'var(--text3)', marginTop: 3 }}>
-                  {granted ? 'Ready' : blocked ? 'Unavailable' : 'Not checked yet'}
+          {/* Compact status row */}
+          <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+            {[{ icon: '📷', label: 'Camera' }, { icon: '🎤', label: 'Mic' }].map(function(item) {
+              return (
+                <div key={item.label} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 8, border: '1px solid ' + (granted ? 'var(--success)' : blocked ? 'var(--danger)' : 'var(--border)'), fontSize: '0.82rem', fontWeight: 600, color: granted ? 'var(--success)' : blocked ? 'var(--danger)' : 'var(--text3)' }}>
+                  {granted ? '✅' : blocked ? '❌' : item.icon} {item.label} {granted ? 'OK' : blocked ? 'Denied' : ''}
                 </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Live preview */}
-        {granted && (
-          <div style={{ marginBottom: 18, borderRadius: 10, overflow: 'hidden', background: '#000', lineHeight: 0, border: '2px solid var(--success)' }}>
-            <video ref={previewRef} autoPlay muted playsInline style={{ width: '100%', maxHeight: 180, objectFit: 'cover', display: 'block' }}/>
+              );
+            })}
           </div>
-        )}
 
-        {/* Error */}
-        {permError && (
-          <div style={{ padding: '12px 14px', background: 'rgba(220,38,38,0.08)', border: '1px solid rgba(220,38,38,0.2)', borderRadius: 9, color: 'var(--danger)', fontSize: '0.85rem', marginBottom: 18, lineHeight: 1.65 }}>
-            {permState === 'no_device'
-              ? <><strong>⚠️ No Camera/Microphone Detected</strong><br/>You <strong>cannot take this exam</strong> without a working camera and microphone. Please connect a device and try again.</>
-              : <><strong>🚫 Access Denied</strong><br/>{permError}</>}
-          </div>
-        )}
+          {/* Small live preview once granted */}
+          {granted && (
+            <div style={{ marginBottom: 14, borderRadius: 8, overflow: 'hidden', background: '#000', lineHeight: 0, border: '1px solid var(--success)' }}>
+              <video ref={previewRef} autoPlay muted playsInline style={{ width: '100%', maxHeight: 120, objectFit: 'cover', display: 'block' }}/>
+            </div>
+          )}
 
-        {/* Info notice */}
-        {permState === 'idle' && (
-          <div style={{ padding: '10px 14px', background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.15)', borderRadius: 9, fontSize: '0.82rem', color: 'var(--accent)', marginBottom: 18, lineHeight: 1.65 }}>
-            ⚠️ Camera and microphone must stay active for the entire exam. Turning them off or switching tabs will be flagged as a violation.
-          </div>
-        )}
+          {/* Error */}
+          {permError && (
+            <div style={{ padding: '8px 12px', background: 'rgba(220,38,38,0.08)', borderRadius: 8, color: 'var(--danger)', fontSize: '0.8rem', marginBottom: 12 }}>
+              {permState === 'no_device' ? '⚠️ No camera/mic detected — connect a device and retry.' : '🚫 ' + permError}
+            </div>
+          )}
 
-        {/* Buttons */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {!granted && !blocked && (
-            <button className="btn btn-primary btn-lg" style={{ justifyContent: 'center' }} onClick={requestPermissions} disabled={checking}>
-              {checking ? <><div className="spinner" style={{ width: 18, height: 18 }}/>&nbsp;Checking…</> : '🔓 Allow Camera & Microphone'}
+        <div style={{ display: 'flex', gap: 8 }}>
+          {!granted && (
+            <button className="btn btn-primary" style={{ flex: 1, justifyContent: 'center' }} onClick={requestPermissions} disabled={checking}>
+              {checking ? <><div className="spinner" style={{ width: 14, height: 14 }}/>&nbsp;Checking…</> : '🔓 Allow Camera & Mic'}
             </button>
           )}
           {granted && (
-            <button className="btn btn-success btn-lg" style={{ justifyContent: 'center' }} onClick={confirmAndStartExam}>
-              🚀 Camera Ready — Start Exam
+            <button className="btn btn-success" style={{ flex: 1, justifyContent: 'center' }} onClick={confirmAndStartExam}>
+              🚀 Start Exam
             </button>
           )}
-          {blocked && (
-            <button className="btn btn-primary btn-lg" style={{ justifyContent: 'center' }} onClick={requestPermissions}>
-              🔄 Try Again
-            </button>
-          )}
-          <button className="btn btn-outline" style={{ justifyContent: 'center' }} onClick={function() { setCheckingExam(null); setPermState('idle'); setPermError(''); }}>
-            ← Cancel
+          <button className="btn btn-outline" onClick={function() { setCheckingExam(null); setPermState('idle'); setPermError(''); }}>
+            Cancel
           </button>
+        </div>
         </div>
       </div>
     );

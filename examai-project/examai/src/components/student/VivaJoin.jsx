@@ -14,8 +14,11 @@ export default function VivaJoin() {
   var synthRef = useRef(window.speechSynthesis);
 
   useEffect(function() {
+    // Load invites and filter out expired/ended ones
     apiGet('/notifications').then(function(n) {
-      setInvites((n||[]).filter(function(x){ return x.viva_room_id; }));
+      setInvites((n||[]).filter(function(x){
+        return x.viva_room_id && x.type !== 'expired' && !x.title.startsWith('[Ended]');
+      }));
     }).catch(function(){});
   }, []); // eslint-disable-line
 
@@ -58,7 +61,6 @@ export default function VivaJoin() {
       <div className="page-header">
         <div>
           <div className="page-title">🎙 Viva Voce</div>
-          <div className="page-subtitle">Join your oral examination</div>
         </div>
       </div>
       {invites.length > 0 && (

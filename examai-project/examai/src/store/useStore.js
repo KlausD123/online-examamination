@@ -77,6 +77,7 @@ export function StoreProvider(props) {
   async function loadAnswers(submissionId) { return await apiGet('/submissions/answers/' + submissionId); }
 
   async function loadLeaderboard(examId) { return await apiGet('/exams/' + examId + '/leaderboard'); }
+  async function loadGlobalLeaderboard() { return await apiGet('/exams/global/leaderboard'); }
 
   async function loadStudents() { var d = await apiGet('/students'); setStudents(d); return d; }
 
@@ -113,7 +114,7 @@ export function StoreProvider(props) {
     unpublishExam: unpublishExam, deleteExam: deleteExam,
     loadQuestions: loadQuestions, addQuestions: addQuestions, removeQuestion: removeQuestion,
     startExam: startExam, submitExam: submitExam, loadSubmissions: loadSubmissions,
-    loadResult: loadResult, loadAnswers: loadAnswers, loadLeaderboard: loadLeaderboard,
+    loadResult: loadResult, loadAnswers: loadAnswers, loadLeaderboard: loadLeaderboard, loadGlobalLeaderboard: loadGlobalLeaderboard, apiGet: apiGet,
     loadStudents: loadStudents, loadNotifications: loadNotifications,
     createNotification: createNotification, deleteNotification: deleteNotification,
     loadAnalytics: loadAnalytics, updateProfile: updateProfile, getStudentSid: getStudentSid,

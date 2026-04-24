@@ -20,9 +20,12 @@ async function gradeSpokenAnswer(question, modelAnswer, studentSaid) {
     return { correct: false, score_pct: 0, verdict: 'No Answer', feedback: 'Student did not respond.', missing: modelAnswer };
   try {
     var raw = await groqChat(
-      'You are a strict oral viva examiner. Grade the spoken answer. Return ONLY valid JSON.',
-      'Question: ' + question + '\nExpected Answer: ' + modelAnswer + '\nStudent Said: ' + studentSaid +
-      '\nGrade fairly — oral answers may be less structured. Return: {"correct":bool,"score_pct":0-100,"verdict":"Correct|Partially Correct|Incorrect","feedback":"2-3 sentences","missing":"key point missed or None"}',
+      'You are an experienced oral viva examiner. Students speak conversationally — judge whether they understand the CONCEPT, not whether they match exact words. A short clear answer showing understanding scores well. Return ONLY valid JSON.',
+      'Question: ' + question +
+      '\nModel Answer (reference only — student need not match this exactly): ' + modelAnswer +
+      '\nStudent Spoken Answer: ' + studentSaid +
+      '\nEvaluate: Does the student grasp the core concept? Did they cover the key idea(s) even if briefly or in their own words?' +
+      '\nReturn: {"correct":bool,"score_pct":0-100,"verdict":"Correct|Partially Correct|Incorrect","feedback":"2-3 sentences on what was good and what was missing","missing":"key concept missed or None"}',
       400, 0.2
     );
     return JSON.parse(raw.replace(/```json|```/g, '').trim());
@@ -79,7 +82,7 @@ export default function VivaRoom() {
   var [topic,       setTopic]       = useState('');
   var savedVivaRef  = useRef(null);
 
-  // ── Restore full session from sessionStorage ──────────────────────────────
+  // ====================================================
   var _didRestore = useRef(false);
   useEffect(function() {
     if (_didRestore.current) return;
@@ -104,7 +107,7 @@ export default function VivaRoom() {
   var [transcript,  setTranscript]  = useState([]);
   var [loading,     setLoading]     = useState(false);
 
-  // ── Persist session on every meaningful state change ──────────────────────
+  // ====================================================
   useEffect(function() {
     if (phase !== 'room' || !savedVivaRef.current) return;
     try {
@@ -205,7 +208,7 @@ export default function VivaRoom() {
     return function() { stopAll(); };
   }, []); // eslint-disable-line
 
-  // ── Listen for student join/left from VivaVideo socket ──────────────────
+  // ====================================================
   useEffect(function() {
     function onJoined(e) {
       var d = e.detail;
@@ -230,7 +233,7 @@ export default function VivaRoom() {
     };
   }, []); // eslint-disable-line
 
-  // ── Away detection ──────────────────────────────────────────────────────
+  // ====================================================
   useEffect(function() {
     if (phase !== 'room') return;
     function onVis() {
@@ -273,7 +276,7 @@ export default function VivaRoom() {
     setExaminerAway(false); setAwayCountdown(600); awayStartRef.current = null;
   }
 
-  // ── Polling ─────────────────────────────────────────────────────────────
+  // ====================================================
   function startPolling() {
     alertLastRef.current = Date.now(); clearInterval(pollRef.current);
     pollRef.current = setInterval(async function() {
@@ -288,7 +291,7 @@ export default function VivaRoom() {
     }, 6000);
   }
 
-  // ── Camera + face detection ──────────────────────────────────────────────
+  // ====================================================
   async function startCamera() {
     var stream = null;
     var constraints = [
@@ -333,7 +336,7 @@ export default function VivaRoom() {
     }, 200);
   }
 
-  // ── WebRTC ────────────────────────────────────────────────────────────────
+  // ====================================================
   var pcRef             = useRef(null);
   var sockVivaRef       = useRef(null); // the vivaId used for socket
   var frameIntervalRef  = useRef(null);
@@ -520,7 +523,7 @@ export default function VivaRoom() {
   }
 
 
-  // ── TTS: speak question then start listening ─────────────────────────────
+  // ====================================================
   function speakAndListen(text) {
     // Send question to student so they can read it on their screen
     var vivaId = savedVivaRef.current ? savedVivaRef.current.viva_id : null;
@@ -552,10 +555,11 @@ export default function VivaRoom() {
     synthRef.current.speak(utt);
   }
 
-  // ── STT: capture student's spoken answer ────────────────────────────────
+  // ====================================================
   function startSTT() {
     if (!SR) { setStatusMsg('Speech recognition not available — use manual input'); return; }
     stopSTT();
+    var FINAL_PHRASES = ['final answer', "that's my answer", 'that is my answer', 'my final answer', "i'm done", 'i am done', 'done', 'submit', 'that is all', "that's all"];
     var rec = new SR();
     rec.continuous = true; rec.interimResults = true; rec.lang = 'en-US';
     rec.onresult = function(e) {
@@ -564,12 +568,25 @@ export default function VivaRoom() {
         if (e.results[i].isFinal) confirmed += e.results[i][0].transcript + ' ';
         else interim += e.results[i][0].transcript;
       }
-      if (confirmed) { capturedRef.current += confirmed; setCapturedText(capturedRef.current); }
+      if (confirmed) {
+        // Check for "final answer" trigger
+        var lower = confirmed.toLowerCase().trim();
+        var saidFinal = FINAL_PHRASES.some(function(p) { return lower.includes(p); });
+        if (saidFinal) {
+          // Remove trigger phrase from captured text
+          FINAL_PHRASES.forEach(function(p) { capturedRef.current = capturedRef.current.replace(new RegExp(p, 'gi'), '').trim(); });
+          setCapturedText(capturedRef.current);
+          clearTimeout(silenceTimer.current);
+          if (flowRef.current === 'listening') setTimeout(doGradeAndWait, 300);
+          return;
+        }
+        capturedRef.current += confirmed; setCapturedText(capturedRef.current);
+      }
       setLiveWords(interim);
       clearTimeout(silenceTimer.current);
       silenceTimer.current = setTimeout(function() {
         if (flowRef.current === 'listening' && capturedRef.current.trim().length > 0) doGradeAndWait();
-      }, 3000);
+      }, 4000);
     };
     rec.onerror = function(e) { if (e.error !== 'no-speech' && e.error !== 'aborted') setStatusMsg('Mic: ' + e.error); };
     rec.onend = function() { if (recRef.current && flowRef.current === 'listening') { try { rec.start(); } catch(ex) {} } };
@@ -581,7 +598,7 @@ export default function VivaRoom() {
     if (recRef.current) { try { recRef.current.stop(); } catch(e) {} recRef.current = null; }
   }
 
-  // ── Track which question is ACTUALLY being asked (not just currentQ state) ─
+  // ====================================================
   var askedQIdxRef = useRef(0);   // the index of the question currently being listened to
 
   async function doGradeAndWait(overrideText) {
@@ -689,7 +706,7 @@ export default function VivaRoom() {
     await doGradeAndWait(ans);
   }
 
-  // ── Manual Question Mode: admin speaks the question via their mic ────────────
+  // ====================================================
   // Phase: 'idle_mq' → admin clicks Record → 'recording_q' (STT captures admin's question)
   //      → admin clicks Done → 'listening' (student answers) → 3s silence → grade
   var [manualQMode,  setManualQMode]  = useState(false);
@@ -735,14 +752,21 @@ export default function VivaRoom() {
     setFlow('speaking'); flowRef.current = 'speaking';
   }
 
-  // ── Generate questions ────────────────────────────────────────────────────
+  // ====================================================
   async function handleGenerateQ() {
     if (!genTopic.trim()) return;
     setGenLoading(true);
     try {
       var existing = questions.map(function(q) { return q.question || ''; });
       var exc = existing.length > 0 ? ' Do NOT repeat: [' + existing.slice(-15).map(function(q) { return q.slice(0, 55); }).join(' | ') + '].' : '';
-      var raw = await groqChat('You are a viva examiner. Return ONLY a JSON array.', 'Generate ' + genCount + ' oral viva questions on "' + genTopic + '".' + exc + ' Return: [{"question":"?","model_answer":"2-4 sentence answer"}]', 2000, 0.75);
+      var vrRnd = Math.floor(Math.random() * 9999);
+      var raw = await groqChat(
+        'You are a viva examiner. Return ONLY a JSON array. Always generate COMPLETELY DIFFERENT questions each call.',
+        'Generate ' + genCount + ' UNIQUE oral viva questions on "' + genTopic + '".' + exc +
+        ' Each question must cover a different sub-topic or angle. Mix conceptual, applied and analytical. Seed: ' + vrRnd + '.' +
+        ' Return: [{"question":"?","model_answer":"2-4 sentence answer"}]',
+        2000, 0.9
+      );
       var qs = JSON.parse(raw.replace(/```json|```/g, '').trim());
       if (!Array.isArray(qs)) throw new Error('Invalid response');
       setQuestions(function(prev) { var next = prev.concat(qs); questionsRef.current = next; return next; });
@@ -907,24 +931,17 @@ export default function VivaRoom() {
   var gcol = function(g) { return g === 'A+' || g === 'A' ? '#22c55e' : g === 'F' ? '#ef4444' : g === 'B' ? '#3b82f6' : '#f59e0b'; };
   var gbg  = function(g) { return g === 'A+' || g === 'A' ? '#dcfce7' : g === 'F' ? '#fee2e2' : g === 'B' ? '#dbeafe' : '#fef3c7'; };
 
-  // ════ SETUP ════════════════════════════════════════════════════════════════
+  // ====================================================
   if (phase === 'setup') return (
     <div className="viva-dark fade-up">
       <div style={{ maxWidth: 540, margin: '60px auto', textAlign: 'center' }}>
         <div style={{ fontSize: '3.5rem', marginBottom: 14 }}>🎙</div>
         <div style={{ fontFamily: 'Space Grotesk,sans-serif', fontWeight: 800, fontSize: '1.7rem', color: '#fff', marginBottom: 6 }}>Start Oral Viva Room</div>
-        <div style={{ fontSize: '0.85rem', color: '#6b7280', marginBottom: 28 }}>Live oral exam — AI reads questions aloud, captures student's speech, grades in real-time</div>
+        <div style={{ fontSize: '0.85rem', color: '#6b7280', marginBottom: 28 }}>Oral examination session</div>
         <div className="card" style={{ textAlign: 'left' }}>
           <div className="form-group"><label className="form-label">Session Title *</label><input className="form-input" value={title} onChange={function(e) { setTitle(e.target.value); }} placeholder="e.g. CS Final Oral Viva"/></div>
           <div className="form-group"><label className="form-label">Topic / Subject</label><input className="form-input" value={topic} onChange={function(e) { setTopic(e.target.value); }} placeholder="e.g. Data Structures"/></div>
-          <div style={{ padding: '12px 14px', background: 'rgba(124,58,237,.1)', border: '1px solid rgba(124,58,237,.2)', borderRadius: 9, marginBottom: 18, fontSize: '0.82rem', color: '#a78bfa', lineHeight: 1.75 }}>
-            <strong>How it works:</strong><br/>
-            1️⃣ Add or generate questions in the room<br/>
-            2️⃣ Click <em>Start Oral Viva</em> — question reads aloud via TTS<br/>
-            3️⃣ Student speaks → STT captures every word as transcript<br/>
-            4️⃣ 3s silence → AI auto-grades spoken answer → next question<br/>
-            5️⃣ Full transcript + AI analysis saved at end
-          </div>
+          <div style={{ padding: '12px 14px', background: 'rgba(124,58,237,.1)', border: '1px solid rgba(124,58,237,.2)', borderRadius: 9, marginBottom: 18, fontSize: '0.82rem', color: '#a78bfa', lineHeight: 1.75 }}> </div>
           <button className="btn btn-primary btn-lg" style={{ width: '100%', justifyContent: 'center' }} onClick={handleStartRoom} disabled={loading || !title.trim()}>
             {loading ? 'Creating Room…' : '🚀 Create Viva Room'}
           </button>
@@ -933,7 +950,7 @@ export default function VivaRoom() {
     </div>
   );
 
-  // ════ AWAY OVERLAY ═══════════════════════════════════════════════════════════
+  // ====================================================
   if (examinerAway && phase === 'room') {
     var am = Math.floor(awayCountdown / 60), as2 = awayCountdown % 60, urgent = awayCountdown < 120;
     return (
@@ -954,7 +971,7 @@ export default function VivaRoom() {
     );
   }
 
-  // ════ SESSION EXPIRED ════════════════════════════════════════════════════════
+  // ====================================================
   if (sessionExpired) return (
     <div style={{ minHeight: 'calc(100vh - 60px)', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0d0d14', padding: 24 }}>
       <div style={{ textAlign: 'center', background: 'rgba(220,38,38,.06)', border: '1px solid rgba(220,38,38,.2)', borderRadius: 20, padding: '44px 52px', maxWidth: 460 }}>
@@ -969,7 +986,7 @@ export default function VivaRoom() {
     </div>
   );
 
-  // ════ GRADING ════════════════════════════════════════════════════════════════
+  // ====================================================
   if (phase === 'grading') return (
     <div className="viva-dark" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 'calc(100vh - 60px)', flexDirection: 'column', gap: 16 }}>
       <div className="spinner" style={{ width: 52, height: 52, borderWidth: 4 }}/>
@@ -978,7 +995,7 @@ export default function VivaRoom() {
     </div>
   );
 
-  // ════ RESULTS ════════════════════════════════════════════════════════════════
+  // ====================================================
   if (phase === 'results' && results) {
     var totalNow = editableAns.length > 0 ? Math.round(editableAns.reduce(function(a, e) { return a + (e.score_pct || 0); }, 0) / editableAns.length) : 0;
     var gradeNow = totalNow >= 90 ? 'A+' : totalNow >= 80 ? 'A' : totalNow >= 70 ? 'B' : totalNow >= 60 ? 'C' : totalNow >= 50 ? 'D' : 'F';
@@ -1076,7 +1093,7 @@ export default function VivaRoom() {
     );
   }
 
-  // ════ FINAL ══════════════════════════════════════════════════════════════════
+  // ====================================================
   if (phase === 'final' && results) {
     var fg = gcol(results.grade || 'F');
     return (
@@ -1099,7 +1116,7 @@ export default function VivaRoom() {
     );
   }
 
-  // ════ ROOM ═══════════════════════════════════════════════════════════════════
+  // ====================================================
   var vivaId = savedVivaRef.current ? savedVivaRef.current.viva_id : '';
   var q = questions[currentQ];
   var displayAnswer = capturedText + (liveWords ? ' ' + liveWords : '');
@@ -1223,7 +1240,16 @@ export default function VivaRoom() {
 
           <div className="card" style={{ padding: 12 }}>
             <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#9ca3af', letterSpacing: 1, marginBottom: 7, fontFamily: 'JetBrains Mono,monospace' }}>⚡ GENERATE QUESTIONS</div>
-            <input className="form-input" value={genTopic} onChange={function(e) { setGenTopic(e.target.value); }} placeholder="Topic…" style={{ marginBottom: 5 }}/>
+            <input className="form-input" value={genTopic} onChange={function(e) { setGenTopic(e.target.value); }} placeholder="Topic or paste notes…" style={{ marginBottom: 5 }}/>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '4px 8px', borderRadius: 6, border: '1px solid rgba(255,255,255,.12)', background: 'rgba(255,255,255,.04)', cursor: 'pointer', fontSize: '0.72rem', color: '#9ca3af', marginBottom: 5 }}>
+              📄 Upload PDF/Text
+              <input type="file" accept=".pdf,.txt" style={{ display: 'none' }} onChange={function(e) {
+                var file = e.target.files[0]; if (!file) return;
+                var reader = new FileReader();
+                reader.onload = function(ev) { setGenTopic(function(prev) { return (prev ? prev + '\n' : '') + ev.target.result.slice(0, 2000); }); };
+                reader.readAsText(file); e.target.value = '';
+              }}/>
+            </label>
             <div style={{ display: 'flex', gap: 4, marginBottom: 5 }}>
               {[3, 5, 7, 10].map(function(n) { return <button key={n} onClick={function() { setGenCount(n); }} style={{ flex: 1, padding: '4px 0', borderRadius: 5, border: '1px solid ' + (genCount === n ? 'var(--accent)' : 'rgba(255,255,255,.1)'), background: genCount === n ? 'rgba(124,58,237,.25)' : 'transparent', color: genCount === n ? '#a78bfa' : '#9ca3af', fontSize: '0.75rem', fontWeight: 700, cursor: 'pointer' }}>{n}</button>; })}
             </div>
