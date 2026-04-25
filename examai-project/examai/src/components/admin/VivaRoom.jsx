@@ -776,8 +776,13 @@ export default function VivaRoom() {
         ' Return: [{"question":"?","model_answer":"2-4 sentence answer"}]',
         2000, 0.9
       );
-      var qs = JSON.parse(raw.replace(/```json|```/g, '').trim());
-      if (!Array.isArray(qs)) throw new Error('Invalid response');
+      var cleaned = (raw||'').replace(/```json/g,'').replace(/```/g,'').trim();
+      var arrMatch = cleaned.match(/\[\s\S\]*\]/);
+      var qs;
+      try { qs = arrMatch ? JSON.parse(arrMatch[0]) : JSON.parse(cleaned); }
+      catch(pe) { throw new Error('AI returned invalid format: ' + cleaned.slice(0,100)); }
+      if (!Array.isArray(qs) || qs.length === 0) throw new Error('No questions returned');
+      qs = qs.map(function(q){ return { question: q.question||q.question_text||q.q||'', model_answer: q.model_answer||q.answer||'' }; }).filter(function(q){ return q.question; });
       setQuestions(function(prev) { var next = prev.concat(qs); questionsRef.current = next; return next; });
       store.addToast('Added ' + qs.length + ' questions', 'success');
     } catch(e) { store.addToast('Generation failed: ' + e.message, 'error'); }
@@ -1260,8 +1265,8 @@ export default function VivaRoom() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, overflow: 'auto' }}>
 
           {/* Jitsi video — always show in room phase */}
-          <div className="card" style={{ padding: 8 }}>
-            <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#9ca3af', letterSpacing: 1, marginBottom: 8, textAlign: 'center', fontFamily: 'JetBrains Mono,monospace' }}>📹 LIVE VIDEO</div>
+          <div style={{ borderRadius:8, overflow:'hidden' }}>
+            <div style={{ fontSize:'0.65rem', fontWeight:700, color:'#9ca3af', letterSpacing:1, marginBottom:6, textAlign:'center', fontFamily:'JetBrains Mono,monospace' }}>📹 LIVE VIDEO — {vivaIdState || vivaId}</div>
             {(vivaIdState || vivaId) ? (
               <JitsiMeet
                 roomName={vivaIdState || vivaId}
@@ -1269,8 +1274,8 @@ export default function VivaRoom() {
                 height={300}
               />
             ) : (
-              <div style={{ height:300, display:'flex', alignItems:'center', justifyContent:'center', color:'#6b7280', fontSize:'0.85rem' }}>
-                No room ID available
+              <div style={{ height:200, display:'flex', alignItems:'center', justifyContent:'center', color:'#6b7280', fontSize:'0.85rem', background:'rgba(255,255,255,.04)', borderRadius:8 }}>
+                Start a room to see video
               </div>
             )}
           </div>
@@ -1282,8 +1287,16 @@ export default function VivaRoom() {
               📄 Upload PDF/Text
               <input type="file" accept=".pdf,.txt" style={{ display: 'none' }} onChange={function(e) {
                 var file = e.target.files[0]; if (!file) return;
+                if (file.name.endsWith('.pdf')) {
+                  store.addToast('PDF reading not supported in browser. Please paste text directly.', 'warning');
+                  e.target.value = ''; return;
+                }
                 var reader = new FileReader();
-                reader.onload = function(ev) { setGenTopic(function(prev) { return (prev ? prev + '\n' : '') + ev.target.result.slice(0, 2000); }); };
+                reader.onload = function(ev) {
+                  var text = ev.target.result.slice(0, 3000);
+                  setGenTopic(function(prev) { return (prev ? prev + '\n' : '') + text; });
+                  store.addToast('Text loaded (' + text.length + ' chars)', 'success');
+                };
                 reader.readAsText(file); e.target.value = '';
               }}/>
             </label>
