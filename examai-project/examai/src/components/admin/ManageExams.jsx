@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useStore } from '../../store/useStore';
 import { formatDateTime, getExamStatus } from '../../utils/helpers';
 
-var API = (process.env.REACT_APP_API_URL || 'http://localhost:5000') + '/api';
+var API = 'https://online-examamination-production.up.railway.app/api';
 function getToken() { return localStorage.getItem('examai_token'); }
 
 export default function ManageExams({ navigate }) {

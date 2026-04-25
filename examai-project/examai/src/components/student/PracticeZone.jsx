@@ -1,29 +1,23 @@
 import { useState, useEffect, useRef } from 'react';
 import { useStore } from '../../store/useStore';
+import { groqChat as groqChatBase } from '../../utils/aiService';
 
-const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const GROQ_KEY = process.env.REACT_APP_GROQ_KEY;
-const GROQ_MODEL = 'llama-3.3-70b-versatile';
-
+// Route through backend — API key stays on server, works without REACT_APP_GROQ_KEY
 async function groqChat(sys, usr, max, temp) {
-  const r = await fetch(GROQ_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + GROQ_KEY },
-    body: JSON.stringify({
-      model: GROQ_MODEL,
-      max_tokens: max || 1000,
-      temperature: temp || 0.7,
-      messages: [{ role: 'system', content: sys }, { role: 'user', content: usr }],
-    }),
-  });
-  const d = await r.json();
-  if (!r.ok) throw new Error((d.error && d.error.message) || ('Groq error ' + r.status));
-  return (d.choices[0].message.content || '').trim();
+  return groqChatBase(sys, usr, max, temp);
 }
 
 async function groqJson(sys, usr, max) {
   const raw = await groqChat(sys, usr, max || 800, 0.75);
-  return JSON.parse(raw.replace(/```json|```/g, '').trim());
+  try {
+    return JSON.parse(raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
+  } catch(e) {
+    const arrMatch = raw.match(/\[[\s\S]*\]/);
+    if (arrMatch) return JSON.parse(arrMatch[0]);
+    const objMatch = raw.match(/\{[\s\S]*\}/);
+    if (objMatch) return JSON.parse(objMatch[0]);
+    throw new Error('Could not parse AI response: ' + raw.slice(0, 100));
+  }
 }
 
 const DIFFICULTIES = ['Easy', 'Medium', 'Hard'];

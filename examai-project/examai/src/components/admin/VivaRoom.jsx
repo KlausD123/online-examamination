@@ -13,7 +13,6 @@ var ICE_SERVERS = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { url
 
 var API = 'https://online-examamination-production.up.railway.app/api';
 var SESSION_KEY = 'dexam_viva_session';
-var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 function getToken() { return localStorage.getItem('examai_token'); }
 function restoreSession() { try { return JSON.parse(sessionStorage.getItem(SESSION_KEY) || 'null'); } catch(e) { return null; } }
 
@@ -541,7 +540,7 @@ export default function VivaRoom() {
     clearInterval(pollRef.current); clearInterval(awayTimerRef.current);
     clearInterval(faceIntRef.current); clearInterval(sigPollRef.current);
     clearTimeout(graceRef.current); clearTimeout(silenceTimer.current);
-    stopSTT(); synthRef.current && synthRef.current.cancel();
+    stopSTT(); stopAdminWhisper(); synthRef.current && synthRef.current.cancel();
     if (socketRef.current) {
       var vivaId = savedVivaRef.current ? savedVivaRef.current.viva_id : null;
       if (vivaId) socketRef.current.emit('end-viva', { viva_id: vivaId });
@@ -743,7 +742,6 @@ export default function VivaRoom() {
       try { mediaRecRef.current.stop(); } catch(e) {}
     }
     mediaRecRef.current = null;
-    if (recRef.current) { try { recRef.current.stop(); } catch(e) {} recRef.current = null; }
   }
 
   // ====================================================
@@ -862,47 +860,103 @@ export default function VivaRoom() {
   var [mqPhase,      setMQPhase]      = useState('idle'); // idle | recording_q | recorded | listening
   var manualQRef     = useRef('');
 
-  // ── Admin records their spoken question using Web Speech API (SR only, no Whisper) ──
-  var adminSRRef = useRef(null); // separate SR instance just for admin question recording
-
-  function startRecordAdminQ() {
-    if (!SR) { setStatusMsg('No speech recognition — type your question instead'); return; }
-    // Stop any running Whisper loop first — admin mic is now for question, not answer
-    stopSTT();
-    manualQRef.current = '';
-    setManualQText(''); setMQPhase('recording_q');
-    var rec = new SR();
-    rec.continuous = true; rec.interimResults = true; rec.lang = 'en-US';
-    rec.maxAlternatives = 1;
-    rec.onresult = function(e) {
-      var fin = '', inter = '';
-      for (var i = e.resultIndex; i < e.results.length; i++) {
-        if (e.results[i].isFinal) fin += e.results[i][0].transcript + ' ';
-        else inter += e.results[i][0].transcript;
-      }
-      if (fin) { manualQRef.current += fin; setManualQText(manualQRef.current.trim()); }
-      setLiveWords(inter);
-    };
-    rec.onerror = function(e) { if (e.error !== 'no-speech' && e.error !== 'aborted') setStatusMsg('Mic: ' + e.error); };
-    rec.onend = function() {
-      if (adminSRRef.current && mqPhaseRef.current === 'recording_q') {
-        try { rec.start(); } catch(ex) {}
-      }
-    };
-    rec.start();
-    adminSRRef.current = rec;
-  }
+  // ── Admin records spoken question via Groq Whisper (MediaRecorder, same as student answer) ──
+  var adminMRRef      = useRef(null);   // MediaRecorder for admin's question
+  var adminChunks     = useRef([]);
+  var adminMRTimer    = useRef(null);
+  var adminMRRunning  = useRef(false);
+  var adminMicStream  = useRef(null);
 
   var mqPhaseRef = useRef('idle');
   useEffect(function() { mqPhaseRef.current = mqPhase; }, [mqPhase]);
 
-  function stopRecordAdminQ() {
-    // Stop ONLY the admin SR — do NOT touch Whisper
-    mqPhaseRef.current = 'recorded';
-    if (adminSRRef.current) {
-      try { adminSRRef.current.stop(); } catch(e) {}
-      adminSRRef.current = null;
+  async function startRecordAdminQ() {
+    stopSTT(); // stop any student-answer Whisper
+    stopAdminWhisper(); // stop any previous admin Whisper
+    manualQRef.current = '';
+    setManualQText(''); setLiveWords(''); setMQPhase('recording_q');
+    adminMRRunning.current = true;
+
+    try {
+      var stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      adminMicStream.current = stream;
+      runAdminWhisperLoop(stream);
+    } catch(e) {
+      adminMRRunning.current = false;
+      setMQPhase('idle');
+      store.addToast('Mic access denied — allow microphone to record question', 'error');
     }
+  }
+
+  function runAdminWhisperLoop(stream) {
+    if (!adminMRRunning.current) return;
+    adminChunks.current = [];
+
+    var mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus'
+                 : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm'
+                 : MediaRecorder.isTypeSupported('audio/ogg')  ? 'audio/ogg' : 'audio/mp4';
+
+    var mr = new MediaRecorder(stream, { mimeType: mimeType });
+    adminMRRef.current = mr;
+
+    mr.ondataavailable = function(e) {
+      if (e.data && e.data.size > 0) adminChunks.current.push(e.data);
+    };
+
+    mr.onstop = async function() {
+      if (!adminMRRunning.current) return;
+      var blob = new Blob(adminChunks.current, { type: mimeType });
+      if (blob.size < 3000) { runAdminWhisperLoop(stream); return; }
+
+      try {
+        var reader = new FileReader();
+        reader.onload = async function() {
+          var base64 = reader.result.split(',')[1];
+          try {
+            var resp = await fetch(API + '/ai/transcribe', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('examai_token') },
+              body: JSON.stringify({ audio: base64, mimeType: mimeType })
+            });
+            var data = await resp.json();
+            var text = (data.text || '').trim();
+            if (text && adminMRRunning.current) {
+              manualQRef.current += text + ' ';
+              setManualQText(manualQRef.current.trim());
+              setLiveWords('');
+            }
+          } catch(err) { console.warn('[AdminWhisper] error:', err); }
+          if (adminMRRunning.current) runAdminWhisperLoop(stream);
+        };
+        reader.readAsDataURL(blob);
+      } catch(e) {
+        if (adminMRRunning.current) runAdminWhisperLoop(stream);
+      }
+    };
+
+    mr.start();
+    // 4-second chunks — shorter for question capture so transcript builds fast
+    adminMRTimer.current = setTimeout(function() {
+      if (mr.state === 'recording') mr.stop();
+    }, 4000);
+  }
+
+  function stopAdminWhisper() {
+    adminMRRunning.current = false;
+    clearTimeout(adminMRTimer.current);
+    if (adminMRRef.current && adminMRRef.current.state !== 'inactive') {
+      try { adminMRRef.current.stop(); } catch(e) {}
+    }
+    adminMRRef.current = null;
+    if (adminMicStream.current) {
+      adminMicStream.current.getTracks().forEach(function(t) { t.stop(); });
+      adminMicStream.current = null;
+    }
+  }
+
+  function stopRecordAdminQ() {
+    mqPhaseRef.current = 'recorded';
+    stopAdminWhisper();
     setLiveWords('');
     setMQPhase('recorded');
   }
@@ -910,15 +964,10 @@ export default function VivaRoom() {
   function startListenStudentForManualQ() {
     var questionToSpeak = manualQRef.current.trim() || manualQText.trim();
     if (!questionToSpeak) { setStatusMsg('Record or type your question first'); return; }
-    // Stop admin SR fully
-    if (adminSRRef.current) {
-      try { adminSRRef.current.stop(); } catch(e) {}
-      adminSRRef.current = null;
-    }
+    stopAdminWhisper();
     stopSTT();
     setMQPhase('listening');
-    // noTTS=true: student already heard admin's voice live through Jitsi
-    // just show the question text on student screen and start Whisper immediately
+    // noTTS=true: student heard admin live via Jitsi — just show text, start Whisper immediately
     speakAndListen(questionToSpeak, true);
   }
 
