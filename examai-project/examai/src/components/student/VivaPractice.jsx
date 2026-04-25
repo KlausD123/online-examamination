@@ -488,7 +488,6 @@ export default function VivaPractice() {
                   <button className="btn btn-ghost btn-sm" onClick={function(){speakText(q.question);}} disabled={speaking}>
                     {speaking ? '🔊 Speaking...' : '🔊 Read Aloud'}
                   </button>
-                  </div>
                 )}
               </div>
               <div style={{ fontSize: '1.1rem', fontWeight: 600, lineHeight: 1.55, color: 'var(--text)' }}>{q.question}</div>
