@@ -1,10 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
 import JitsiMeet from '../JitsiMeet';
+
 import { useStore } from '../../store/useStore';
 import { groqChat } from '../../utils/aiService';
 import { apiPost, apiGet } from '../../utils/api';
 import { io as ioClient } from 'socket.io-client';
-import VivaVideo from '../VivaVideo';
+
 
 var SOCKET_URL = 'http://localhost:5000';
 
@@ -700,7 +701,7 @@ export default function VivaRoom() {
     setFollowUpLoading(true); setFollowUpQ('');
     try {
       var prompt = 'Original question: ' + lastT.question + '\nStudent answered: ' + (lastT.student_said || 'no answer') + '\nMissing points: ' + (lastT.missing || 'none') + '\n\nGenerate ONE concise follow-up question (max 20 words) to probe deeper or clarify what was missing. Return only the question text, no quotes.';
-      var resp = await groqChat([{ role: 'user', content: prompt }], 80, 0.7);
+      var resp = await groqChat('You are a viva examiner generating one focused follow-up question.', prompt, 80, 0.7);
       var fq = (resp || '').trim().replace(/^["']|["']$/g, '');
       setFollowUpQ(fq);
     } catch(e) { setFollowUpQ('Could not generate follow-up: ' + e.message); }
@@ -777,7 +778,7 @@ export default function VivaRoom() {
         2000, 0.9
       );
       var cleaned = (raw||'').replace(/```json/g,'').replace(/```/g,'').trim();
-      var arrMatch = cleaned.match(/\[\s\S\]*\]/);
+      var arrMatch = cleaned.match(/\[[\s\S]*\]/);
       var qs;
       try { qs = arrMatch ? JSON.parse(arrMatch[0]) : JSON.parse(cleaned); }
       catch(pe) { throw new Error('AI returned invalid format: ' + cleaned.slice(0,100)); }
@@ -1264,13 +1265,13 @@ export default function VivaRoom() {
         {/* LEFT: Jitsi video + question tools */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, overflow: 'auto' }}>
 
-          {/* Jitsi video — same as student */}
+          {/* Live Jitsi video */}
           <div className="card" style={{ padding: 10 }}>
             <div style={{ fontSize:'0.65rem', fontWeight:700, color:'#9ca3af', letterSpacing:1, marginBottom:8, textAlign:'center', fontFamily:'JetBrains Mono,monospace' }}>
               📹 LIVE SESSION
             </div>
             {vivaId
-              ? <JitsiMeet roomName={vivaId} displayName="Examiner" height={260}/>
+              ? <JitsiMeet roomName={vivaId} displayName={store.currentUser ? (store.currentUser.name || 'Examiner') : 'Examiner'} height={280}/>
               : <div style={{ height:200, display:'flex', alignItems:'center', justifyContent:'center', color:'#6b7280', fontSize:'0.85rem' }}>Video loading…</div>
             }
           </div>

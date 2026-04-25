@@ -154,13 +154,14 @@ export default function VivaPractice() {
   }
 
   // ====================================================
-  var silenceTimer  = useRef(null);
-  var liveTextRef   = useRef('');
-  var recordingRef  = useRef(false);
-  var qIndexRef     = useRef(0);
-  var transcriptRef = useRef([]);
-  var questionsRef  = useRef([]);
-  var flowActive    = useRef(false);
+  var silenceTimer       = useRef(null);
+  var liveTextRef        = useRef('');
+  var recordingRef       = useRef(false);
+  var qIndexRef          = useRef(0);
+  var transcriptRef      = useRef([]);
+  var questionsRef       = useRef([]);
+  var flowActive         = useRef(false);
+  var recordingStartTime = useRef(null);
 
   function speakText(text, onDone) {
     if (!synthRef.current || !text) {
