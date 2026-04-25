@@ -1362,6 +1362,11 @@ export default function VivaRoom() {
                 {entry._custom && <span className="badge badge-warning" style={{ fontSize: '0.7rem' }}>✏ Examiner Q</span>}
                 <span style={{ fontWeight: 700, fontSize: '0.95rem', flex: 1 }}>{entry.question}</span>
                 <span style={{ fontWeight: 900, fontSize: '1.3rem', color: col, flexShrink: 0 }}>{entry.score_pct}%</span>
+                <button title="Remove this entry from transcript"
+                  onClick={function() { if(window.confirm('Remove this Q&A from the transcript?')) { setEditableAns(function(p){ return p.filter(function(_,j){ return j!==i; }); }); } }}
+                  style={{ background:'rgba(220,38,38,.15)', border:'1px solid rgba(220,38,38,.3)', borderRadius:6, color:'#f87171', fontSize:'0.7rem', fontWeight:700, padding:'2px 8px', cursor:'pointer', flexShrink:0 }}>
+                  🗑 Remove
+                </button>
               </div>
               <div style={{ padding: '7px 12px', background: 'rgba(124,58,237,.06)', borderRadius: 7, fontSize: '0.82rem', color: 'var(--text3)', marginBottom: 6 }}>
                 <strong>📚 Expected:</strong> {entry.model_answer}

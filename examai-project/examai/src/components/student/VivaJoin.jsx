@@ -48,37 +48,50 @@ export default function VivaJoin() {
     sock.on('disconnect',    function() { setSockStatus('disconnected'); });
     sock.on('connect_error', function() { setSockStatus('error'); });
 
-    // Admin sends question → TTS reads it aloud on student's device only
+    // Admin sends question → TTS reads it on student device
     sock.on('question-text', function(data) {
-      var text   = data.text;
-      var noTTS  = data.noTTS; // true = manual mode, admin spoke live via Jitsi
+      var text  = data.text;
+      var noTTS = data.noTTS;
 
       setCurrentQ(text);
       setQFlash(true);
       setTimeout(function() { setQFlash(false); }, 600);
 
       if (noTTS) {
-        // Manual mode: student already heard admin's voice through the Jitsi call.
-        // Just display the question text — no TTS, no signal needed.
-        // Admin already started Whisper on their side.
+        // Manual mode: student heard admin live via Jitsi — just show text
         return;
       }
 
-      // Generated mode: read question aloud via TTS, then tell admin we're done
+      // Generated mode: read question aloud via TTS
       function signalTTSDone() {
         if (sock.connected) sock.emit('tts-done', { vivaId: vid });
       }
 
-      if (synthRef.current && window.speechSynthesis) {
-        synthRef.current.cancel();
-        var utt = new SpeechSynthesisUtterance(text);
-        utt.rate = 0.9; utt.lang = 'en-US';
-        utt.onend  = function() { signalTTSDone(); };
-        utt.onerror= function() { signalTTSDone(); };
-        synthRef.current.speak(utt);
-      } else {
-        signalTTSDone();
+      function speakQuestion() {
+        if (!window.speechSynthesis) { signalTTSDone(); return; }
+        window.speechSynthesis.cancel();
+        // Wait for voices to load
+        function doSpeak() {
+          var utt = new SpeechSynthesisUtterance(text);
+          utt.rate = 0.88; utt.lang = 'en-US'; utt.volume = 1;
+          // Pick a clear voice if available
+          var voices = window.speechSynthesis.getVoices();
+          var preferred = voices.find(function(v){ return v.lang.startsWith('en') && !v.name.includes('compact'); });
+          if (preferred) utt.voice = preferred;
+          utt.onend  = function() { signalTTSDone(); };
+          utt.onerror= function() { signalTTSDone(); };
+          window.speechSynthesis.speak(utt);
+        }
+        if (window.speechSynthesis.getVoices().length > 0) {
+          doSpeak();
+        } else {
+          window.speechSynthesis.onvoiceschanged = function() { doSpeak(); };
+          // Fallback if voices never load
+          setTimeout(doSpeak, 800);
+        }
       }
+
+      speakQuestion();
     });
   }
 
@@ -170,8 +183,22 @@ export default function VivaJoin() {
           background: qFlash ? 'rgba(124,58,237,.45)' : 'rgba(124,58,237,.15)',
           border: '2px solid rgba(124,58,237,.5)', borderRadius: 10, transition: 'background .3s'
         }}>
-          <div style={{ fontSize: '0.6rem', fontWeight: 700, color: '#a78bfa', letterSpacing: 1, marginBottom: 4, fontFamily: 'JetBrains Mono,monospace' }}>
-            🔊 QUESTION
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+            <div style={{ fontSize: '0.6rem', fontWeight: 700, color: '#a78bfa', letterSpacing: 1, fontFamily: 'JetBrains Mono,monospace' }}>
+              🔊 QUESTION
+            </div>
+            <button onClick={function() {
+              if (!window.speechSynthesis) return;
+              window.speechSynthesis.cancel();
+              var utt = new SpeechSynthesisUtterance(currentQ);
+              utt.rate = 0.88; utt.lang = 'en-US';
+              var voices = window.speechSynthesis.getVoices();
+              var pref = voices.find(function(v){ return v.lang.startsWith('en'); });
+              if (pref) utt.voice = pref;
+              window.speechSynthesis.speak(utt);
+            }} style={{ background: 'rgba(124,58,237,.3)', border: 'none', borderRadius: 6, padding: '3px 10px', color: '#a78bfa', fontSize: '0.7rem', fontWeight: 700, cursor: 'pointer' }}>
+              🔁 Replay
+            </button>
           </div>
           <div style={{ fontSize: '1rem', fontWeight: 700, color: '#fff', lineHeight: 1.5 }}>{currentQ}</div>
           <div style={{ fontSize: '0.7rem', color: '#9ca3af', marginTop: 5 }}>Speak your answer clearly</div>

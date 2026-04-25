@@ -124,7 +124,7 @@ router.post('/:viva_id/result', requireAdmin, async (req, res) => {
     }
 
     await pool.query(
-      'INSERT INTO viva_results (viva_id, student_id, student_name, total_score, grade, correct_count, total_questions, full_transcript, ai_report) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO viva_results (viva_id, student_id, student_name, total_score, grade, correct_count, total_questions, full_transcript, ai_report, result_visible) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)',
       [req.params.viva_id, student_id || null, student_name || 'Unknown', total_score || 0, grade || 'F', correct_count || 0, total_questions || 0, full_transcript || '', JSON.stringify(ai_report || {})]
     );
 
@@ -140,6 +140,18 @@ router.post('/:viva_id/result', requireAdmin, async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+});
+
+// Toggle result visibility for student
+router.post('/:viva_id/result/:result_id/visibility', requireAdmin, async (req, res) => {
+  try {
+    const { visible } = req.body;
+    await pool.query(
+      'UPDATE viva_results SET result_visible = ? WHERE result_id = ? AND viva_id = ?',
+      [visible ? 1 : 0, req.params.result_id, req.params.viva_id]
+    );
+    res.json({ message: 'Visibility updated', visible: !!visible });
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 // Send invite

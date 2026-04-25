@@ -339,60 +339,84 @@ export default function Analytics() {
             ? <div className="loading-center"><div className="spinner"/></div>
             : vivaResults.length === 0
             ? <div className="empty-state"><div className="empty-state-icon">🎙</div><div className="empty-state-title">No viva results yet</div></div>
-            : <div className="card">
+            : <div>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
-                <div style={{ fontWeight:700, fontSize:'1.05rem' }}>🎙 Viva Results — All Students</div>
+                <div style={{ fontWeight:700, fontSize:'1.05rem' }}>🎙 Viva Results — Student Wise</div>
                 <button className="btn btn-outline btn-sm" onClick={function(){
-                  var vivaHeaders = ['Student,Email,Session,Topic,Score (%),Grade,Correct,Total Questions,Date'];
+                  var rows = ['Student,Email,Session,Topic,Score (%),Grade,Correct,Total,Visible,Date'];
                   (vivaResults||[]).forEach(function(r){
-                    vivaHeaders.push([
-                      '"'+(r.student_name||'').replace(/"/g,"'")+'"',
-                      r.student_email||'',
-                      '"'+(r.title||'').replace(/"/g,"'")+'"',
-                      '"'+(r.topic||'').replace(/"/g,"'")+'"',
-                      r.total_score||0, r.grade||'F',
-                      r.correct_count||0, r.total_questions||0,
-                      r.created_at ? new Date(r.created_at).toLocaleDateString() : ''
-                    ].join(','));
+                    rows.push(['"'+(r.student_name||'').replace(/"/g,"'")+'"', r.student_email||'',
+                      '"'+(r.title||'').replace(/"/g,"'")+'"', '"'+(r.topic||'').replace(/"/g,"'")+'"',
+                      r.total_score||0, r.grade||'F', r.correct_count||0, r.total_questions||0,
+                      r.result_visible ? 'Yes' : 'No',
+                      r.created_at ? new Date(r.created_at).toLocaleDateString() : ''].join(','));
                   });
-                  downloadCSV('viva_results.csv', vivaHeaders);
+                  downloadCSV('viva_results.csv', rows);
                 }}>📥 Export CSV</button>
               </div>
-              <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.85rem' }}>
-                <thead><tr style={{ borderBottom:'2px solid var(--border)' }}>
-                  <th style={{ textAlign:'left', padding:'8px', color:'var(--text3)' }}>Student</th>
-                  <th style={{ textAlign:'left', padding:'8px', color:'var(--text3)' }}>Session</th>
-                  <th style={{ textAlign:'center', padding:'8px', color:'var(--text3)' }}>Score</th>
-                  <th style={{ textAlign:'center', padding:'8px', color:'var(--text3)' }}>Grade</th>
-                  <th style={{ textAlign:'center', padding:'8px', color:'var(--text3)' }}>Correct</th>
-                  <th style={{ textAlign:'center', padding:'8px', color:'var(--text3)' }}>Visible</th>
-                  <th style={{ textAlign:'left', padding:'8px', color:'var(--text3)' }}>Date</th>
-                </tr></thead>
-                <tbody>
-                  {vivaResults.map(function(r, i) {
-                    var sg = r.grade==='A+'||r.grade==='A'?'#16a34a':r.grade==='B'?'#2563eb':r.grade==='C'?'#d97706':'#dc2626';
-                    return (
-                      <tr key={i} style={{ borderBottom:'1px solid var(--border)' }}>
-                        <td style={{ padding:'10px 8px' }}>
-                          <div style={{ fontWeight:600 }}>{r.student_name||'Unknown'}</div>
-                          <div style={{ fontSize:'0.73rem', color:'var(--text3)' }}>{r.student_email||''}</div>
-                        </td>
-                        <td style={{ padding:'10px 8px' }}>
-                          <div style={{ fontWeight:500 }}>{r.title}</div>
-                          <div style={{ fontSize:'0.73rem', color:'var(--text3)' }}>{r.topic||''}</div>
-                        </td>
-                        <td style={{ padding:'10px 8px', textAlign:'center', fontWeight:700, fontFamily:'JetBrains Mono,monospace' }}>{r.total_score||0}%</td>
-                        <td style={{ padding:'10px 8px', textAlign:'center', fontWeight:800, fontSize:'1rem', color:sg }}>{r.grade||'-'}</td>
-                        <td style={{ padding:'10px 8px', textAlign:'center', color:'var(--text3)' }}>{r.correct_count||0}/{r.total_questions||0}</td>
-                        <td style={{ padding:'10px 8px', textAlign:'center' }}>
-                          <span className={'badge badge-'+(r.result_visible?'success':'warning')}>{r.result_visible?'Visible':'Hidden'}</span>
-                        </td>
-                        <td style={{ padding:'10px 8px', color:'var(--text3)', fontSize:'0.78rem' }}>{new Date(r.created_at).toLocaleDateString()}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+              {vivaResults.map(function(r, i) {
+                var sg = r.grade==='A+'||r.grade==='A'?'#16a34a':r.grade==='B'?'#2563eb':r.grade==='C'?'#d97706':'#dc2626';
+                var wrong = (r.total_questions||0) - (r.correct_count||0);
+                return (
+                  <div key={i} className="card" style={{ marginBottom:12, borderLeft:'4px solid '+sg }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', flexWrap:'wrap', gap:10 }}>
+                      {/* Student + session info */}
+                      <div style={{ flex:1, minWidth:180 }}>
+                        <div style={{ fontWeight:700, fontSize:'1rem', marginBottom:2 }}>{r.student_name||'Unknown'}</div>
+                        <div style={{ fontSize:'0.75rem', color:'var(--text3)', marginBottom:4 }}>{r.student_email||''}</div>
+                        <div style={{ fontSize:'0.78rem', fontWeight:600, color:'var(--text2)' }}>{r.title}</div>
+                        {r.topic && <div style={{ fontSize:'0.72rem', color:'var(--accent)', marginTop:2 }}>📚 {r.topic}</div>}
+                        <div style={{ fontSize:'0.7rem', color:'var(--text3)', marginTop:4 }}>{new Date(r.created_at).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'})}</div>
+                      </div>
+                      {/* Score stats */}
+                      <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+                        <div style={{ textAlign:'center', minWidth:52 }}>
+                          <div style={{ fontWeight:900, fontSize:'1.8rem', color:sg, lineHeight:1 }}>{r.grade||'-'}</div>
+                          <div style={{ fontSize:'0.62rem', color:'var(--text3)' }}>GRADE</div>
+                        </div>
+                        <div style={{ textAlign:'center', minWidth:52 }}>
+                          <div style={{ fontWeight:800, fontSize:'1.3rem', color:sg }}>{r.total_score||0}%</div>
+                          <div style={{ fontSize:'0.62rem', color:'var(--text3)' }}>SCORE</div>
+                        </div>
+                        <div style={{ display:'flex', gap:6 }}>
+                          <div style={{ padding:'6px 10px', background:'rgba(22,163,74,.1)', border:'1px solid rgba(22,163,74,.2)', borderRadius:7, textAlign:'center' }}>
+                            <div style={{ fontWeight:800, fontSize:'1.1rem', color:'#16a34a' }}>{r.correct_count||0}</div>
+                            <div style={{ fontSize:'0.6rem', color:'#16a34a', fontWeight:600 }}>✅ RIGHT</div>
+                          </div>
+                          <div style={{ padding:'6px 10px', background:'rgba(220,38,38,.1)', border:'1px solid rgba(220,38,38,.2)', borderRadius:7, textAlign:'center' }}>
+                            <div style={{ fontWeight:800, fontSize:'1.1rem', color:'#dc2626' }}>{wrong}</div>
+                            <div style={{ fontSize:'0.6rem', color:'#dc2626', fontWeight:600 }}>❌ WRONG</div>
+                          </div>
+                          <div style={{ padding:'6px 10px', background:'var(--surface2)', border:'1px solid var(--border)', borderRadius:7, textAlign:'center' }}>
+                            <div style={{ fontWeight:800, fontSize:'1.1rem', color:'var(--text)' }}>{r.total_questions||0}</div>
+                            <div style={{ fontSize:'0.6rem', color:'var(--text3)', fontWeight:600 }}>TOTAL</div>
+                          </div>
+                        </div>
+                        {/* Visibility toggle */}
+                        <button
+                          style={{ padding:'6px 12px', borderRadius:7, border:'1px solid '+(r.result_visible?'rgba(22,163,74,.4)':'rgba(245,158,11,.4)'),
+                            background: r.result_visible?'rgba(22,163,74,.1)':'rgba(245,158,11,.1)',
+                            color: r.result_visible?'#4ade80':'#fbbf24', fontSize:'0.72rem', fontWeight:700, cursor:'pointer' }}
+                          onClick={function() {
+                            var newVis = !r.result_visible;
+                            apiGet('/viva/'+r.viva_id+'/results-csv-data').then(function(){}).catch(function(){});
+                            fetch('https://online-examamination-production.up.railway.app/api/viva/'+r.viva_id+'/result/'+r.result_id+'/visibility', {
+                              method:'POST',
+                              headers:{'Content-Type':'application/json','Authorization':'Bearer '+localStorage.getItem('examai_token')},
+                              body: JSON.stringify({ visible: newVis })
+                            }).then(function() {
+                              setVivaResults(function(prev) {
+                                return prev.map(function(x, j) { return j===i ? Object.assign({},x,{result_visible:newVis?1:0}) : x; });
+                              });
+                            }).catch(function(){});
+                          }}>
+                          {r.result_visible ? '👁 Visible to Student' : '🙈 Hidden from Student'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           }
         </div>
