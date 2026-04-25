@@ -1,66 +1,38 @@
-import React, { useEffect, useRef } from 'react';
+import React from 'react';
 
+// Simple iframe approach - works for both admin and student
 export default function JitsiMeet({ roomName, displayName, height }) {
-  var ref = useRef(null);
-  var apiRef = useRef(null);
+  if (!roomName) return null;
 
-  useEffect(function() {
-    if (!roomName || !ref.current) return;
-    var room = 'dexamviva' + String(roomName).replace(/\D/g,'');
+  // Create consistent room name from viva_id
+  var room = 'dexamviva' + String(roomName).replace(/[^a-zA-Z0-9]/g, '');
+  var name  = encodeURIComponent(displayName || 'User');
+  var h     = height || 360;
 
-    function init() {
-      if (!window.JitsiMeetExternalAPI || !ref.current) return;
-      if (apiRef.current) { try { apiRef.current.dispose(); } catch(e) {} apiRef.current = null; }
-      apiRef.current = new window.JitsiMeetExternalAPI('meet.jit.si', {
-        roomName: room,
-        width: '100%',
-        height: height || 320,
-        parentNode: ref.current,
-        userInfo: { displayName: displayName || 'User' },
-        configOverwrite: {
-          prejoinPageEnabled: false,
-          startWithAudioMuted: false,
-          startWithVideoMuted: false,
-          disableDeepLinking: true,
-          enableWelcomePage: false,
-          requireDisplayName: false,
-          p2p: { enabled: true },
-          toolbarButtons: ['microphone', 'camera', 'fullscreen', 'tileview', 'desktop'],
-        },
-        interfaceConfigOverwrite: {
-          SHOW_JITSI_WATERMARK: false,
-          SHOW_WATERMARK_FOR_GUESTS: false,
-          SHOW_BRAND_WATERMARK: false,
-          SHOW_POWERED_BY: false,
-          HIDE_INVITE_MORE_HEADER: true,
-          SETTINGS_SECTIONS: ['devices'],
-          MOBILE_APP_PROMO: false,
-        }
-      });
-    }
-
-    if (window.JitsiMeetExternalAPI) {
-      init();
-    } else {
-      var s = document.getElementById('jitsi-api-script');
-      if (!s) {
-        s = document.createElement('script');
-        s.id = 'jitsi-api-script';
-        s.src = 'https://meet.jit.si/external_api.js';
-        document.head.appendChild(s);
-      }
-      s.onload = function() { setTimeout(init, 200); };
-      if (s.readyState === 'complete' || s.readyState === 'loaded') setTimeout(init, 200);
-    }
-
-    return function() {
-      if (apiRef.current) { try { apiRef.current.dispose(); } catch(e) {} apiRef.current = null; }
-    };
-  }, [roomName, displayName]); // eslint-disable-line
+  var src = 'https://meet.jit.si/' + room
+    + '?config.prejoinPageEnabled=false'
+    + '&config.startWithAudioMuted=false'
+    + '&config.startWithVideoMuted=false'
+    + '&config.disableDeepLinking=true'
+    + '&config.enableWelcomePage=false'
+    + '&config.requireDisplayName=false'
+    + '&config.p2p.enabled=true'
+    + '&userInfo.displayName=' + name
+    + '&interfaceConfig.SHOW_JITSI_WATERMARK=false'
+    + '&interfaceConfig.SHOW_POWERED_BY=false'
+    + '&interfaceConfig.HIDE_INVITE_MORE_HEADER=true'
+    + '&interfaceConfig.MOBILE_APP_PROMO=false';
 
   return (
-    <div style={{ width: '100%', minHeight: height || 320, background: '#1a1a2e', borderRadius: 8, overflow: 'hidden' }}>
-      <div ref={ref} style={{ width: '100%', minHeight: height || 320 }} />
+    <div style={{ width:'100%', borderRadius:8, overflow:'hidden', background:'#0f0f1a' }}>
+      <iframe
+        key={room}
+        src={src}
+        allow="camera *; microphone *; display-capture *; fullscreen *; autoplay *"
+        allowFullScreen
+        style={{ width:'100%', height:h, border:'none', display:'block' }}
+        title={'Viva: ' + room}
+      />
     </div>
   );
 }

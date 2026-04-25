@@ -1221,14 +1221,18 @@ export default function VivaRoom() {
           </button>
           <button className="btn btn-sm btn-outline" onClick={function() { setShowInvite(!showInvite); if (!showInvite) loadStudents(); }}>✉ Invite</button>
           <button className="btn btn-danger btn-sm" onClick={handleEndAndGrade} disabled={loading || transcript.length === 0}>⏹ End &amp; Grade</button>
-          {transcript.length === 0 && (
-            <button className="btn btn-warning btn-sm" onClick={function(){
-              if(window.confirm('End viva without grading? No score will be saved.')) {
-                var vivaId = savedVivaRef.current && savedVivaRef.current.viva_id;
-                if(vivaId) apiPost('/viva/' + vivaId + '/end', {}).then(function(){ setPhase('setup'); store.addToast('Viva ended', 'info'); }).catch(function(){});
+          <button className="btn btn-outline btn-sm" style={{ color:'var(--danger)', borderColor:'var(--danger)' }} onClick={function(){
+            if(window.confirm('End viva session? ' + (transcript.length > 0 ? 'Current progress will be lost.' : 'No score will be saved.'))) {
+              var vivaId = savedVivaRef.current && savedVivaRef.current.viva_id;
+              if (vivaId) {
+                apiPost('/viva/' + vivaId + '/end', {}).catch(function(){});
               }
-            }}>✕ End Without Grade</button>
-          )}
+              setPhase('setup');
+              setTranscript([]); setQuestions([]);
+              setFlow('idle'); setVerdict(null);
+              store.addToast('Viva session ended', 'info');
+            }
+          }}>✕ End Session</button>
         </div>
       </div>
 
