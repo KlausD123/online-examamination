@@ -6,15 +6,22 @@ import { apiPost } from '../../utils/api';
 async function checkFrameWithGroq(videoEl) {
   try {
     var canvas = document.createElement('canvas');
-    canvas.width = 320; canvas.height = 240;
-    canvas.getContext('2d').drawImage(videoEl, 0, 0, 320, 240);
-    var base64 = canvas.toDataURL('image/jpeg', 0.6).split(',')[1];
-    // Call backend which holds the API key
-    var data = await apiPost('/ai/vision', { image: base64, prompt: 'Count the number of people/persons visible. Reply with ONLY a single digit: 0, 1, 2, 3 etc.' });
-    var num = parseInt((data.result || '1').match(/\d+/)?.[0]) || 1;
+    canvas.width = 240; canvas.height = 180; // Smaller = faster
+    canvas.getContext('2d').drawImage(videoEl, 0, 0, 240, 180);
+    var base64 = canvas.toDataURL('image/jpeg', 0.5).split(',')[1];
+    var data = await apiPost('/ai/vision', {
+      image: base64,
+      prompt: 'Count people visible. Reply ONLY with: 0, 1, or 2+ (if more than one). Just the number.'
+    });
+    var text = (data.result || '1').trim();
+    var num = text.includes('2+') ? 2 : (parseInt(text.match(/\d+/)?.[0]) || 1);
     console.log('[Proctor] Persons detected:', num);
     return num;
-  } catch(e) { console.warn('[Proctor] Vision check failed:', e); return 1; }
+  } catch(e) {
+    // Rate limit or error — don't flag violation, just skip this check
+    console.warn('[Proctor] check skipped:', e.message);
+    return 1;
+  }
 }
 
 export default function ExamInterface({ exam, submissionId, onComplete }) {
@@ -175,7 +182,7 @@ export default function ExamInterface({ exam, submissionId, onComplete }) {
         multiFaceFramesRef.current = 0;
         setFaceStatus('ok');
       }
-    }, 5000); // Check every 5 seconds
+    }, 8000); // Check every 8 seconds — balance between accuracy and API rate limits
   }
 
   var handleVisibility = useCallback(function () {

@@ -562,6 +562,7 @@ export default function VivaRoom() {
     var FINAL_PHRASES = ['final answer', "that's my answer", 'that is my answer', 'my final answer', "i'm done", 'i am done', 'done', 'submit', 'that is all', "that's all"];
     var rec = new SR();
     rec.continuous = true; rec.interimResults = true; rec.lang = 'en-US';
+    rec.maxAlternatives = 1;
     rec.onresult = function(e) {
       var confirmed = '', interim = '';
       for (var i = e.resultIndex; i < e.results.length; i++) {
@@ -721,6 +722,7 @@ export default function VivaRoom() {
     setManualQText(''); setMQPhase('recording_q');
     var rec = new SR();
     rec.continuous = true; rec.interimResults = true; rec.lang = 'en-US';
+    rec.maxAlternatives = 1;
     rec.onresult = function(e) {
       var fin = '', inter = '';
       for (var i = e.resultIndex; i < e.results.length; i++) {

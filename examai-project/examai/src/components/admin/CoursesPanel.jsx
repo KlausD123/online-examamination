@@ -37,6 +37,18 @@ export default function CoursesPanel() {
     try { await apiDelete('/courses/' + id); setCourses(function(p) { return p.filter(function(c){return c.course_id!==id;}); }); } catch(e){}
   }
 
+  async function removeMember(courseId, studentId, studentName) {
+    if (!window.confirm('Remove ' + studentName + ' from this course?')) return;
+    try {
+      await apiDelete('/courses/' + courseId + '/member/' + studentId);
+      setMembers(function(p) {
+        var updated = Object.assign({}, p);
+        updated[courseId] = (updated[courseId]||[]).filter(function(m){ return m.user_id !== studentId; });
+        return updated;
+      });
+    } catch(e) { alert('Could not remove student'); }
+  }
+
   async function loadMembers(id) {
     if (expanded === id) { setExpanded(null); return; }
     setExpanded(id);

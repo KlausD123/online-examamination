@@ -20,18 +20,28 @@ router.post('/', requireAdmin, async (req, res) => {
       const [rows] = await pool.query('SELECT 1 FROM courses WHERE join_code=?', [code]);
       exists = rows.length > 0;
     }
-    const [r] = await pool.query(
-      'INSERT INTO courses (name, description, join_code, created_by, course_type) VALUES (?,?,?,?,?)',
-      [name, description||'', code, req.user.user_id, type]
-    );
-    // If global: auto-enroll all existing students
-    if (type === 'global') {
-      await pool.query(`
-        INSERT IGNORE INTO course_members (course_id, student_id)
-        SELECT ?, user_id FROM users WHERE role='student'
-      `, [r.insertId]);
+    // Try insert with course_type, fall back without if column missing
+    let insertId;
+    try {
+      const [r] = await pool.query(
+        'INSERT INTO courses (name, description, join_code, created_by, course_type) VALUES (?,?,?,?,?)',
+        [name, description||'', code, req.user.user_id, type]
+      );
+      insertId = r.insertId;
+    } catch(colErr) {
+      const [r] = await pool.query(
+        'INSERT INTO courses (name, description, join_code, created_by) VALUES (?,?,?,?)',
+        [name, description||'', code, req.user.user_id]
+      );
+      insertId = r.insertId;
     }
-    res.json({ course_id: r.insertId, name, description, join_code: code, course_type: type });
+    if (type === 'global') {
+      await pool.query(
+        'INSERT IGNORE INTO course_members (course_id, student_id) SELECT ?, user_id FROM users WHERE role=\'student\'',
+        [insertId]
+      ).catch(function(){});
+    }
+    res.json({ course_id: insertId, name, description, join_code: code, course_type: type });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -68,6 +78,17 @@ router.get('/:id/members', requireAdmin, async (req, res) => {
 router.delete('/:id', requireAdmin, async (req, res) => {
   try {
     await pool.query('DELETE FROM courses WHERE course_id=? AND created_by=?', [req.params.id, req.user.user_id]);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Admin: Remove student from course ────────────────────────
+router.delete('/:id/member/:studentId', requireAdmin, async (req, res) => {
+  try {
+    await pool.query(
+      'DELETE FROM course_members WHERE course_id=? AND student_id=?',
+      [req.params.id, req.params.studentId]
+    );
     res.json({ success: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });

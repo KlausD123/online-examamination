@@ -132,6 +132,7 @@ export default function VivaPractice() {
     rec.continuous = true;
     rec.interimResults = true;
     rec.lang = 'en-US';
+    rec.maxAlternatives = 1;
 
     // Reset silence timer every time speech is detected
     // Trigger phrases that mean "I'm done"
@@ -168,10 +169,10 @@ export default function VivaPractice() {
       setInterimText(interim);
       // 4 seconds of silence → auto-grade
       silenceTimer.current = setTimeout(function() {
-        if (recordingRef.current && liveTextRef.current.trim().length > 3) {
+        if (recordingRef.current && liveTextRef.current.trim().length > 5) {
           stopListeningAndGrade();
         }
-      }, 4000);
+      }, 5000);
     };
 
     rec.onend = function() {
@@ -288,7 +289,7 @@ export default function VivaPractice() {
         return 'Q' + (i+1) + ': ' + e.question + ' | Student: ' + (e.student_said || '(no answer)') + ' | ' + (e.verdict ? e.verdict.verdict : 'Not graded');
       }).join('; ');
       var usr = 'Analyze this viva practice session on "' + topic + '":\n' + log +
-        '\nReturn: {"overall_feedback":"3-4 sentences","strong_topics":["t"],"weak_topics":["t"],"improvement_tips":["tip1","tip2","tip3"],"predicted_exam_readiness":"Not Ready/Almost Ready/Ready"}';
+        '\nReturn ONLY valid JSON with this exact structure:\n{"overall_feedback":"3-4 sentences about performance","strong_topics":["specific topic student knew well","another strength"],"weak_topics":["specific topic student struggled with","another weakness"],"improvement_tips":["specific actionable tip 1","specific actionable tip 2","specific actionable tip 3"],"predicted_exam_readiness":"Not Ready|Almost Ready|Ready"}\nBe specific about topics — use actual subject matter not generic phrases.';
       var raw = await groqChat(sys, usr, 600, 0.5);
       var analysis = parseJSON(raw);
 
@@ -607,19 +608,27 @@ export default function VivaPractice() {
               {analysis.overall_feedback}
             </div>
           )}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
-            <div>
-              <div style={{ fontWeight: 700, color: 'var(--success)', marginBottom: 8, fontSize: '0.85rem' }}>💪 Strengths</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+            <div style={{ background: 'rgba(22,163,74,.06)', borderRadius: 10, padding: '12px 14px', border: '1px solid rgba(22,163,74,.2)' }}>
+              <div style={{ fontWeight: 700, color: '#16a34a', marginBottom: 10, fontSize: '0.85rem' }}>💪 Strengths</div>
               {(analysis.strong_topics || []).length === 0
-                ? <div style={{ color: 'var(--text3)', fontSize: '0.85rem' }}>Keep practicing to build strengths</div>
-                : (analysis.strong_topics || []).map(function(t, i) { return <div key={i} style={{ fontSize: '0.85rem', padding: '4px 0', color: 'var(--text2)' }}>✅ {t}</div>; })
+                ? <div style={{ color: 'var(--text3)', fontSize: '0.82rem' }}>Keep practicing to build strengths</div>
+                : (analysis.strong_topics || []).map(function(t, i) { return (
+                  <div key={i} style={{ display:'flex', alignItems:'flex-start', gap:6, marginBottom:6 }}>
+                    <span style={{ color:'#16a34a', fontSize:'0.8rem', marginTop:2, flexShrink:0 }}>✅</span>
+                    <span style={{ fontSize: '0.85rem', color: 'var(--text2)' }}>{t}</span>
+                  </div>); })
               }
             </div>
-            <div>
-              <div style={{ fontWeight: 700, color: 'var(--danger)', marginBottom: 8, fontSize: '0.85rem' }}>📌 Needs Work</div>
+            <div style={{ background: 'rgba(220,38,38,.06)', borderRadius: 10, padding: '12px 14px', border: '1px solid rgba(220,38,38,.2)' }}>
+              <div style={{ fontWeight: 700, color: '#dc2626', marginBottom: 10, fontSize: '0.85rem' }}>📌 Needs Work</div>
               {(analysis.weak_topics || []).length === 0
-                ? <div style={{ color: 'var(--text3)', fontSize: '0.85rem' }}>Great job — no major gaps!</div>
-                : (analysis.weak_topics || []).map(function(t, i) { return <div key={i} style={{ fontSize: '0.85rem', padding: '4px 0', color: 'var(--text2)' }}>⚠️ {t}</div>; })
+                ? <div style={{ color: 'var(--text3)', fontSize: '0.82rem' }}>Great job — no major gaps!</div>
+                : (analysis.weak_topics || []).map(function(t, i) { return (
+                  <div key={i} style={{ display:'flex', alignItems:'flex-start', gap:6, marginBottom:6 }}>
+                    <span style={{ color:'#dc2626', fontSize:'0.8rem', marginTop:2, flexShrink:0 }}>⚠️</span>
+                    <span style={{ fontSize: '0.85rem', color: 'var(--text2)' }}>{t}</span>
+                  </div>); })
               }
             </div>
           </div>
