@@ -37,6 +37,29 @@ app.post('/api/ai/chat', require('./middleware/auth').authenticateToken, async (
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+app.post('/api/ai/vision', require('./middleware/auth').authenticateToken, async (req, res) => {
+  const { image, prompt } = req.body;
+  if (!image) return res.status(400).json({ error: 'image required' });
+  if (!process.env.GROQ_API_KEY) return res.status(503).json({ error: 'AI not configured' });
+  try {
+    const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + process.env.GROQ_API_KEY },
+      body: JSON.stringify({
+        model: 'llama-3.2-11b-vision-preview',
+        max_tokens: 10,
+        messages: [{ role: 'user', content: [
+          { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + image } },
+          { type: 'text', text: prompt || 'How many people are visible? Reply with only a number.' }
+        ]}]
+      }),
+    });
+    const data = await r.json();
+    const text = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '1').trim();
+    res.json({ result: text });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Debug endpoint — see all rooms and who's in them
 app.get('/api/debug/rooms', (req, res) => {
   const result = {};
