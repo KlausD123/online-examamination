@@ -1144,8 +1144,19 @@ export default function VivaRoom() {
         <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
           <button className="btn btn-outline" onClick={function() { setPhase('results'); }}>← Review</button>
           <button className="btn btn-primary" onClick={resetForNextStudent}>👤 Next Student (Keep Room)</button>
-          <a className="btn btn-outline" href={(process.env.REACT_APP_API_URL||'http://localhost:5000') + '/api/viva/' + (savedVivaRef.current && savedVivaRef.current.viva_id) + '/export-csv'}
-            target="_blank" rel="noopener noreferrer">📥 Export CSV</a>
+          <button className="btn btn-outline" onClick={function(){
+              var vid = savedVivaRef.current && savedVivaRef.current.viva_id;
+              if (!vid) return;
+              var token = localStorage.getItem('examai_token');
+              fetch((process.env.REACT_APP_API_URL||'http://localhost:5000') + '/api/viva/' + vid + '/export-csv', {
+                headers: { 'Authorization': 'Bearer ' + token }
+              }).then(function(r){ return r.blob(); }).then(function(blob){
+                var url = URL.createObjectURL(blob);
+                var a = document.createElement('a');
+                a.href = url; a.download = 'viva_results.csv'; a.click();
+                URL.revokeObjectURL(url);
+              }).catch(function(e){ alert('Export failed: ' + e.message); });
+            }}>📥 Export CSV</button>
           <button className="btn btn-outline btn-sm" onClick={function(){
             var vivaId = savedVivaRef.current && savedVivaRef.current.viva_id;
             var resultId = results && results.result_id;

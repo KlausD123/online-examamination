@@ -181,7 +181,14 @@ export default function Analytics() {
                   <div className="card" key={exam.exam_id}>
                     <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:16, flexWrap:'wrap', gap:12 }}>
                       <div>
-                        <div style={{ fontWeight:700, fontSize:'1.1rem', marginBottom:4 }}>{exam.title}</div>
+                        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4 }}>
+                          <div style={{ fontWeight:700, fontSize:'1.1rem' }}>{exam.title}</div>
+                          <button className="btn btn-outline btn-sm" onClick={function(){
+                            downloadCSV(exam.title.replace(/[^a-z0-9]/gi,'_')+'_results.csv',
+                              detail.filter(function(r){return r.exam_id===exam.exam_id;}),
+                              ['student_name','total_score','grade','correct_count','wrong_count','status']);
+                          }}>📥 Export CSV</button>
+                        </div>
                         <div style={{ fontSize:'0.78rem', color:'var(--text3)' }}>{exam.total_marks} marks · {exam.submission_count} submissions</div>
                       </div>
                       <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
@@ -312,7 +319,12 @@ export default function Analytics() {
             : vivaResults.length === 0
             ? <div className="empty-state"><div className="empty-state-icon">🎙</div><div className="empty-state-title">No viva results yet</div></div>
             : <div className="card">
-              <div style={{ fontWeight:700, marginBottom:16, fontSize:'1.05rem' }}>🎙 Viva Results — All Students</div>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+                <div style={{ fontWeight:700, fontSize:'1.05rem' }}>🎙 Viva Results — All Students</div>
+                <button className="btn btn-outline btn-sm" onClick={function(){
+                  downloadCSV('viva_results.csv', vivaResults, ['student_name','student_email','title','topic','total_score','grade','correct_count','total_questions','created_at']);
+                }}>📥 Export CSV</button>
+              </div>
               <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.85rem' }}>
                 <thead><tr style={{ borderBottom:'2px solid var(--border)' }}>
                   <th style={{ textAlign:'left', padding:'8px', color:'var(--text3)' }}>Student</th>

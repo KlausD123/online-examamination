@@ -49,6 +49,29 @@ router.get('/all-results', requireAdmin, async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── Export viva results as CSV ────────────────────────────────
+router.get('/:viva_id/export-csv', requireAdmin, async (req, res) => {
+  try {
+    const [results] = await pool.query(
+      'SELECT vr.student_name, vr.total_score, vr.grade, vr.correct_count, vr.total_questions, vr.created_at, vs.title, vs.topic FROM viva_results vr JOIN viva_sessions vs ON vr.viva_id = vs.viva_id WHERE vr.viva_id = ? ORDER BY vr.total_score DESC',
+      [req.params.viva_id]
+    );
+    var title = results.length > 0 ? results[0].title : 'viva';
+    var csv = 'Student Name,Score (%),Grade,Correct,Total Questions,Session,Topic,Date\n';
+    results.forEach(function(r) {
+      csv += [
+        r.student_name||'Unknown', r.total_score||0, r.grade||'F',
+        r.correct_count||0, r.total_questions||0,
+        (r.title||'').replace(/,/g,''), (r.topic||'').replace(/,/g,''),
+        new Date(r.created_at).toLocaleDateString()
+      ].join(',') + '\n';
+    });
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="' + title.replace(/[^a-z0-9]/gi,'_') + '_results.csv"');
+    res.send(csv);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // Get student's viva results
 router.get('/my-results', authenticateToken, async (req, res) => {
   try {
