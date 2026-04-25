@@ -1312,17 +1312,21 @@ export default function VivaRoom() {
         {/* LEFT: Jitsi video + question tools */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, overflow: 'auto' }}>
 
-          {/* Jitsi video — uses state so React re-renders when room created */}
-          {vivaIdState && (
-            <div className="card" style={{ padding: 8 }}>
-              <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#9ca3af', letterSpacing: 1, marginBottom: 8, textAlign: 'center', fontFamily: 'JetBrains Mono,monospace' }}>📹 LIVE VIDEO</div>
+          {/* Jitsi video — always show in room phase */}
+          <div className="card" style={{ padding: 8 }}>
+            <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#9ca3af', letterSpacing: 1, marginBottom: 8, textAlign: 'center', fontFamily: 'JetBrains Mono,monospace' }}>📹 LIVE VIDEO</div>
+            {(vivaIdState || vivaId) ? (
               <JitsiMeet
-                roomName={vivaIdState}
+                roomName={vivaIdState || vivaId}
                 displayName="Examiner"
                 height={300}
               />
-            </div>
-          )}
+            ) : (
+              <div style={{ height:300, display:'flex', alignItems:'center', justifyContent:'center', color:'#6b7280', fontSize:'0.85rem' }}>
+                No room ID available
+              </div>
+            )}
+          </div>
 
           <div className="card" style={{ padding: 12 }}>
             <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#9ca3af', letterSpacing: 1, marginBottom: 7, fontFamily: 'JetBrains Mono,monospace' }}>⚡ GENERATE QUESTIONS</div>
