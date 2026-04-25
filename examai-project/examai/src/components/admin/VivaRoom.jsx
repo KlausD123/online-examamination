@@ -7,11 +7,11 @@ import { apiPost, apiGet } from '../../utils/api';
 import { io as ioClient } from 'socket.io-client';
 
 
-var SOCKET_URL = 'http://localhost:5000';
+var SOCKET_URL = 'https://online-examamination-production.up.railway.app';
 
 var ICE_SERVERS = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
 
-var API = 'http://localhost:5000/api';
+var API = 'https://online-examamination-production.up.railway.app/api';
 var SESSION_KEY = 'dexam_viva_session';
 var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 function getToken() { return localStorage.getItem('examai_token'); }
@@ -602,29 +602,63 @@ export default function VivaRoom() {
     sock.on('connect_error', function(e) { console.error('[Admin] socket error:', e.message); });
   }
 
-  // ── Send question to student — NO local TTS, NO local mic ────────
+  // ── Send question to student via socket (student TTS reads it) ──
   function speakAndListen(text) {
     var vivaId = savedVivaRef.current ? savedVivaRef.current.viva_id : null;
-    // Emit question to student's browser — student's TTS reads it, student's mic captures answer
     if (socketRef.current && socketRef.current.connected && vivaId) {
       socketRef.current.emit('question-text', { vivaId: vivaId, text: text });
     } else {
       store.addToast('Socket not connected — student may not receive question', 'warning');
     }
-    // Switch to listening state — student answers will arrive via socket
+    // Clear previous answer and move to listening
     capturedRef.current = ''; setCapturedText(''); setLiveWords('');
-    setFlow('speaking'); flowRef.current = 'speaking'; setStatusMsg('Sending to student…');
-    // After brief delay switch to listening (waiting for student response)
+    setFlow('speaking'); flowRef.current = 'speaking'; setStatusMsg('Question sent to student…');
+    // Short delay then start STT — admin's mic picks up student's voice through Jitsi
     setTimeout(function() {
       setFlow('listening'); flowRef.current = 'listening';
-      setStatusMsg('Waiting for student to answer…');
-    }, 1500);
+      setStatusMsg('');
+      startSTT();
+    }, 2000);
   }
 
-  // startSTT / stopSTT are kept as no-ops — admin never listens locally
-  function startSTT() {}
+  // ── STT on admin browser — hears student voice coming through Jitsi ──
+  function startSTT() {
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { setStatusMsg('Speech recognition not available in this browser'); return; }
+    stopSTT();
+    var rec = new SR();
+    rec.continuous = true; rec.interimResults = true; rec.lang = 'en-US'; rec.maxAlternatives = 1;
+
+    rec.onresult = function(e) {
+      clearTimeout(silenceTimer.current);
+      var confirmed = '', interim = '';
+      for (var i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) confirmed += e.results[i][0].transcript + ' ';
+        else interim += e.results[i][0].transcript;
+      }
+      if (confirmed) {
+        capturedRef.current += confirmed;
+        setCapturedText(capturedRef.current.trim());
+      }
+      setLiveWords(interim);
+      clearTimeout(silenceTimer.current);
+      silenceTimer.current = setTimeout(function() {
+        if (flowRef.current === 'listening' && capturedRef.current.trim().length > 0) doGradeAndWait();
+      }, 4000);
+    };
+
+    rec.onerror = function(ev) {
+      if (ev.error !== 'no-speech' && ev.error !== 'aborted') setStatusMsg('Mic: ' + ev.error);
+    };
+    rec.onend = function() {
+      if (recRef.current && flowRef.current === 'listening') { try { rec.start(); } catch(ex) {} }
+    };
+    rec.start(); recRef.current = rec;
+  }
+
   function stopSTT() {
     clearTimeout(silenceTimer.current); setLiveWords('');
+    if (recRef.current) { try { recRef.current.stop(); } catch(e) {} recRef.current = null; }
   }
 
   // ====================================================
