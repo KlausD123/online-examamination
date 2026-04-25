@@ -988,25 +988,7 @@ export default function VivaRoom() {
   );
 
   // ====================================================
-  if (examinerAway && phase === 'room') {
-    var am = Math.floor(awayCountdown / 60), as2 = awayCountdown % 60, urgent = awayCountdown < 120;
-    return (
-      <div style={{ minHeight: 'calc(100vh - 60px)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', background: '#0d0d14' }}>
-        <div style={{ textAlign: 'center', padding: '44px 52px', background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.1)', borderRadius: 20, maxWidth: 460 }}>
-          <div style={{ fontSize: '3.5rem', marginBottom: 14 }}>⏸</div>
-          <div style={{ fontFamily: 'Space Grotesk,sans-serif', fontWeight: 800, fontSize: '1.5rem', color: '#fff', marginBottom: 8 }}>You Left the Viva Room</div>
-          <div style={{ fontSize: '0.85rem', color: '#9ca3af', marginBottom: 24, lineHeight: 1.6 }}>Session is paused. Student is waiting. Return within 10 minutes or the session ends automatically.</div>
-          <div style={{ fontFamily: 'JetBrains Mono,monospace', fontSize: '5rem', fontWeight: 900, color: urgent ? '#ef4444' : '#f59e0b', letterSpacing: 6, lineHeight: 1, marginBottom: 8, textShadow: urgent ? '0 0 40px rgba(239,68,68,.5)' : '0 0 40px rgba(245,158,11,.4)' }}>
-            {String(am).padStart(2, '0')}:{String(as2).padStart(2, '0')}
-          </div>
-          <div style={{ fontSize: '0.82rem', color: urgent ? '#f87171' : '#6b7280', marginBottom: 32, fontWeight: urgent ? 700 : 400 }}>
-            {urgent ? '⚠️ Session will end soon!' : 'Return to continue'}
-          </div>
-          <button className="btn btn-primary btn-lg" onClick={examinerReturn} style={{ padding: '13px 48px' }}>▶ Return to Viva Room</button>
-        </div>
-      </div>
-    );
-  }
+  // ExaminerAway removed
 
   // ====================================================
   if (sessionExpired) return (
@@ -1146,7 +1128,6 @@ export default function VivaRoom() {
         </div>
         <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
           <button className="btn btn-outline" onClick={function() { setPhase('results'); }}>← Review</button>
-          <button className="btn btn-primary" onClick={resetForNextStudent}>👤 Next Student (Keep Room)</button>
           <button className="btn btn-outline" onClick={async function(){
               var vid = savedVivaRef.current && savedVivaRef.current.viva_id;
               if (!vid) { alert('No viva session'); return; }
@@ -1262,23 +1243,6 @@ export default function VivaRoom() {
             </select>
           : <button className="btn btn-sm btn-outline" style={{ fontSize: '0.72rem' }} onClick={function() { loadStudents(); }}>Load Students</button>}
         {selStudentName && <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#a78bfa' }}>{selStudentName}</span>}
-      </div>
-
-      {/* Student Activity — join/left only */}
-      <div className="card" style={{ marginBottom: 10, maxHeight: 140, overflowY: 'auto' }}>
-        <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#9ca3af', letterSpacing: 1, marginBottom: 6, fontFamily: 'JetBrains Mono,monospace' }}>STUDENT ACTIVITY</div>
-        {alerts.length === 0
-          ? <div style={{ fontSize: '0.78rem', color: '#6b7280', textAlign: 'center', padding: '4px 0' }}>Waiting for student…</div>
-          : alerts.map(function(a, idx2) {
-              var col = a.type === 'urgent' ? '#dc2626' : '#16a34a';
-              return (
-                <div key={idx2} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 8px', borderLeft: '3px solid ' + col, marginBottom: 3, fontSize: '0.74rem', background: 'rgba(255,255,255,.03)', borderRadius: '0 4px 4px 0' }}>
-                  <span style={{ fontWeight: 700, color: col }}>{a.title}</span>
-                  {a.time && <span style={{ fontSize: '0.65rem', color: '#6b7280' }}>{a.time}</span>}
-                </div>
-              );
-            })
-        }
       </div>
 
       {showInvite && (
