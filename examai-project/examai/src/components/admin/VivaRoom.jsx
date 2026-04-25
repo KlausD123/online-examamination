@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import JitsiMeet from '../JitsiMeet';
 import { useStore } from '../../store/useStore';
 import { groqChat } from '../../utils/aiService';
 import { apiPost, apiGet } from '../../utils/api';
@@ -1279,15 +1280,14 @@ export default function VivaRoom() {
         {/* LEFT: Jitsi video + question tools */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, overflow: 'auto' }}>
 
-          {/* WebRTC video — admin sees student, student sees admin */}
+          {/* Jitsi video */}
           {savedVivaRef.current && (
             <div className="card" style={{ padding: 8 }}>
               <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#9ca3af', letterSpacing: 1, marginBottom: 8, textAlign: 'center', fontFamily: 'JetBrains Mono,monospace' }}>📹 LIVE VIDEO</div>
-              <VivaVideo
-                vivaId={savedVivaRef.current.viva_id}
-                role="admin"
-                displayName="Examiner"
-                onSocketReady={function(sock) { socketRef.current = sock; }}
+              <JitsiMeet
+                roomName={savedVivaRef.current.viva_id}
+                displayName={'Examiner'}
+                height={280}
               />
             </div>
           )}

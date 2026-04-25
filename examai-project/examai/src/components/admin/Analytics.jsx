@@ -170,7 +170,7 @@ export default function Analytics() {
                 })}
               </div>
               {/* Selected exam detail */}
-              {function() {
+              {(function() {
                 var exam = selExamTab || (examList.length > 0 ? examList[0] : null);
                 if (!exam) return null;
                 var passRate = exam.submission_count > 0 ? Math.round((exam.passed_count / exam.submission_count) * 100) : 0;
@@ -182,29 +182,30 @@ export default function Analytics() {
                     <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:16, flexWrap:'wrap', gap:12 }}>
                       <div>
                         <div style={{ fontWeight:700, fontSize:'1.1rem', marginBottom:4 }}>{exam.title}</div>
-                        <div style={{ fontSize:'0.78rem', color:'var(--text3)' }}>{exam.total_marks} marks total</div>
+                        <div style={{ fontSize:'0.78rem', color:'var(--text3)' }}>{exam.total_marks} marks · {exam.submission_count} submissions</div>
                       </div>
-                      <div style={{ display:'flex', gap:14, flexWrap:'wrap' }}>
+                      <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
                         {[
-                          { label:'Submissions', val: exam.submission_count, color:'var(--accent)' },
-                          { label:'Avg Score', val: (exam.avg_score||0).toFixed(1)+' / '+exam.total_marks, color:gc2 },
+                          { label:'Avg Score', val: Number(exam.avg_score||0).toFixed(1)+'/'+exam.total_marks, color:gc2 },
                           { label:'Pass Rate', val: passRate+'%', color: passRate>=50?'#16a34a':'#dc2626' },
                           { label:'Violations', val: exam.violation_count||0, color: (exam.violation_count||0)>0?'#dc2626':'#16a34a' },
                         ].map(function(s, si) { return (
-                          <div key={si} style={{ textAlign:'center', padding:'8px 16px', background:'var(--surface2)', borderRadius:8, minWidth:80 }}>
-                            <div style={{ fontWeight:800, fontSize:'1.2rem', color:s.color }}>{s.val}</div>
-                            <div style={{ fontSize:'0.7rem', color:'var(--text3)', marginTop:2 }}>{s.label}</div>
+                          <div key={si} style={{ textAlign:'center', padding:'8px 14px', background:'var(--surface2)', borderRadius:8, minWidth:70 }}>
+                            <div style={{ fontWeight:800, fontSize:'1.1rem', color:s.color }}>{s.val}</div>
+                            <div style={{ fontSize:'0.68rem', color:'var(--text3)', marginTop:2 }}>{s.label}</div>
                           </div>
                         ); })}
                       </div>
                     </div>
-                    {examStudents.length > 0 && (
-                      <div style={{ marginTop:16 }}>
+                    {examStudents.length > 0 ? (
+                      <div style={{ marginTop:14 }}>
                         <div style={{ fontWeight:600, marginBottom:10, fontSize:'0.85rem' }}>Student Results</div>
                         <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.82rem' }}>
                           <thead><tr style={{ borderBottom:'2px solid var(--border)' }}>
                             <th style={{ textAlign:'left', padding:'6px 8px', color:'var(--text3)' }}>Student</th>
                             <th style={{ textAlign:'center', padding:'6px 8px', color:'var(--text3)' }}>Score</th>
+                            <th style={{ textAlign:'center', padding:'6px 8px', color:'var(--text3)' }}>Correct</th>
+                            <th style={{ textAlign:'center', padding:'6px 8px', color:'var(--text3)' }}>Wrong</th>
                             <th style={{ textAlign:'center', padding:'6px 8px', color:'var(--text3)' }}>Grade</th>
                             <th style={{ textAlign:'center', padding:'6px 8px', color:'var(--text3)' }}>Status</th>
                           </tr></thead>
@@ -214,8 +215,10 @@ export default function Analytics() {
                               return (
                                 <tr key={si} style={{ borderBottom:'1px solid var(--border)' }}>
                                   <td style={{ padding:'8px', fontWeight:600 }}>{s.student_name}</td>
-                                  <td style={{ padding:'8px', textAlign:'center' }}>{s.total_score||0}</td>
-                                  <td style={{ padding:'8px', textAlign:'center', fontWeight:700, color:sg }}>{s.grade||'-'}</td>
+                                  <td style={{ padding:'8px', textAlign:'center', fontFamily:'JetBrains Mono,monospace', fontWeight:700 }}>{s.total_score||0}</td>
+                                  <td style={{ padding:'8px', textAlign:'center', color:'#16a34a', fontWeight:600 }}>{s.correct_count||0}</td>
+                                  <td style={{ padding:'8px', textAlign:'center', color:'#dc2626', fontWeight:600 }}>{s.wrong_count||0}</td>
+                                  <td style={{ padding:'8px', textAlign:'center', fontWeight:800, color:sg }}>{s.grade||'-'}</td>
                                   <td style={{ padding:'8px', textAlign:'center' }}><span className={'badge badge-'+(s.status==='cheated'?'danger':'success')}>{s.status}</span></td>
                                 </tr>
                               );
@@ -223,10 +226,12 @@ export default function Analytics() {
                           </tbody>
                         </table>
                       </div>
+                    ) : (
+                      <div style={{ color:'var(--text3)', fontSize:'0.85rem', textAlign:'center', padding:'20px 0' }}>No detailed student data yet</div>
                     )}
                   </div>
                 );
-              }()}
+              })()}
             </div>
           }
         </div>

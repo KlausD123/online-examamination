@@ -133,7 +133,17 @@ export default function VivaPractice() {
   }
 
   function startListening() {
-    if (!SR) { console.warn('No speech recognition'); return; }
+    if (!SR) {
+      // No SR — show type box for manual entry
+      setRecording(false);
+      recordingRef.current = false;
+      return;
+    }
+    // Stop any existing recognition
+    if (recRef.current) {
+      try { recRef.current.stop(); } catch(e) {}
+      recRef.current = null;
+    }
     liveTextRef.current = '';
     setLiveText('');
     setInterimText('');
@@ -187,12 +197,35 @@ export default function VivaPractice() {
       }, 5000);
     };
 
-    rec.onend = function() {
-      if (recordingRef.current) { try { rec.start(); } catch(e2) {} }
+    rec.onerror = function(e) {
+      if (e.error === 'not-allowed') {
+        setRecording(false); recordingRef.current = false;
+        console.warn('Mic permission denied');
+        return;
+      }
+      if (e.error !== 'no-speech') console.warn('STT error:', e.error);
     };
-    rec.onerror = function(e) { if (e.error !== 'no-speech') console.warn('STT error:', e.error); };
-    rec.start();
-    recRef.current = rec;
+    rec.onend = function() {
+      if (recordingRef.current && flowActive.current) {
+        try {
+          var r2 = new SR();
+          r2.continuous = true; r2.interimResults = true;
+          r2.lang = 'en-US'; r2.maxAlternatives = 1;
+          r2.onresult = rec.onresult;
+          r2.onerror = rec.onerror;
+          r2.onend = rec.onend;
+          r2.start();
+          recRef.current = r2;
+        } catch(e2) { console.warn('STT restart failed:', e2); }
+      }
+    };
+    try {
+      rec.start();
+      recRef.current = rec;
+    } catch(startErr) {
+      console.warn('STT start failed:', startErr);
+      setRecording(false); recordingRef.current = false;
+    }
   }
 
   function stopListening() {

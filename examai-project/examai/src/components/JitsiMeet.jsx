@@ -33,10 +33,11 @@ export default function JitsiMeet({ roomName, displayName, height }) {
             requireDisplayName: false,         // Don't ask for name
             disableThirdPartyRequests: true,
             hideConferenceSubject: true,
-            toolbarButtons: ['microphone', 'camera', 'hangup', 'fullscreen', 'tileview'],
+            toolbarButtons: ['microphone', 'camera', 'fullscreen', 'tileview'],
             disablePolls: true,
-            subject: ' ',                      // Empty subject hides room name banner
+            subject: ' ',
             defaultLocalDisplayName: displayName || 'User',
+            enableClosePage: false,
           },
           interfaceConfigOverwrite: {
             SHOW_JITSI_WATERMARK: false,
@@ -45,13 +46,21 @@ export default function JitsiMeet({ roomName, displayName, height }) {
             SHOW_POWERED_BY: false,
             DISPLAY_WELCOME_FOOTER: false,
             HIDE_INVITE_MORE_HEADER: true,
-            TOOLBAR_BUTTONS: ['microphone', 'camera', 'hangup', 'fullscreen', 'tileview'],
+            TOOLBAR_BUTTONS: ['microphone', 'camera', 'fullscreen', 'tileview'],
             SETTINGS_SECTIONS: ['devices'],
             MOBILE_APP_PROMO: false,
             APP_NAME: 'DExam Viva',
             NATIVE_APP_NAME: 'DExam',
             PROVIDER_NAME: 'DExam',
             DEFAULT_LOCAL_DISPLAY_NAME: displayName || 'User',
+          }
+        });
+        // Prevent accidental hangup — reconnect if user somehow leaves
+        apiRef.current.addListener('videoConferenceLeft', function() {
+          if (containerRef.current && roomName) {
+            setTimeout(function() {
+              if (containerRef.current) init();
+            }, 1500);
           }
         });
       } catch(e) {
