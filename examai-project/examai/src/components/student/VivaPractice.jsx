@@ -298,6 +298,8 @@ export default function VivaPractice() {
         analysis: analysis, transcript: finalTranscript || transcript
       };
       setResults(r);
+      // Save with full analysis
+      saveToLocalStorage(topic, total, correct, avgPct, grade, analysis);
     } catch(e) {
       // Build basic analysis from transcript data even if AI fails
       var wrongAnswers = (finalTranscript || transcript).filter(function(e){ return e.verdict && !e.verdict.correct; }).map(function(e){ return e.question; });
@@ -306,26 +308,27 @@ export default function VivaPractice() {
         overall_feedback: 'Session completed with ' + correct + ' correct out of ' + total + ' questions (' + avgPct + '%). Review the questions marked incorrect below.',
         strong_topics: rightAnswers.slice(0,3).map(function(q){ return q.slice(0,50); }),
         weak_topics: wrongAnswers.slice(0,3).map(function(q){ return q.slice(0,50); }),
-        improvement_tips: wrongAnswers.length > 0 ? ['Review the topics you answered incorrectly', 'Practice more questions on weak areas', 'Focus on clear explanation of concepts'] : ['Good performance! Keep practicing to maintain', 'Try harder difficulty questions', 'Explore advanced topics'],
+        improvement_tips: wrongAnswers.length > 0 ? ['Review the topics you answered incorrectly', 'Practice more questions on weak areas', 'Focus on clear explanation of concepts'] : ['Keep practicing to maintain performance', 'Try harder difficulty questions', 'Explore advanced topics'],
         predicted_exam_readiness: avgPct >= 70 ? 'Almost Ready' : avgPct >= 50 ? 'Almost Ready' : 'Not Ready'
       };
       setResults({ grade: grade, avgPct: avgPct, correct: correct, total: total, analysis: fallbackAnalysis, transcript: finalTranscript || transcript });
+      saveToLocalStorage(topic, total, correct, avgPct, grade, fallbackAnalysis);
     }
+    setAnalyzing(false);
+  }
 
-    // Always save to localStorage regardless of AI success/failure
+  function saveToLocalStorage(subj, total, correct, avgPct, grade, analysis) {
     try {
-      var savedAnalysis = (results && results.analysis) || null;
       var record = {
-        id: Date.now(), mode: 'viva', subject: topic,
+        id: Date.now(), mode: 'viva', subject: subj,
         total_questions: total, correct: correct, score_pct: avgPct, grade: grade,
         date: new Date().toISOString(),
-        analysis: savedAnalysis
+        analysis: analysis || null
       };
       var prev = JSON.parse(localStorage.getItem('practice_results') || '[]');
       prev.unshift(record);
       localStorage.setItem('practice_results', JSON.stringify(prev.slice(0, 50)));
-    } catch(saveErr) { console.warn('Could not save practice result:', saveErr); }
-    setAnalyzing(false);
+    } catch(saveErr) { console.warn('Could not save:', saveErr); }
   }
 
   function resetAll() {

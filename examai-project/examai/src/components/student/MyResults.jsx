@@ -205,13 +205,57 @@ export default function MyResults({ navigate }) {
                         </div>
                         {r.analysis && (
                           <details style={{ marginTop: 8 }}>
-                            <summary style={{ fontSize: '0.82rem', color: 'var(--accent)', cursor: 'pointer', fontWeight: 600 }}>📊 View Analysis</summary>
-                            <div style={{ marginTop: 8, padding: '12px 14px', background: 'var(--surface2)', borderRadius: 8, fontSize: '0.85rem' }}>
-                              {r.analysis.overall_feedback && <p style={{ marginBottom: 8, color: 'var(--text2)' }}>{r.analysis.overall_feedback}</p>}
-                              {r.analysis.predicted_exam_readiness && (
-                                <div style={{ padding: '4px 8px', background: 'var(--accent-glow)', borderRadius: 6, fontWeight: 600, color: 'var(--accent)', fontSize: '0.8rem', display: 'inline-block' }}>
-                                  Readiness: {r.analysis.predicted_exam_readiness}
+                            <summary style={{ fontSize: '0.82rem', color: 'var(--accent)', cursor: 'pointer', fontWeight: 600 }}>📊 View Full Analysis</summary>
+                            <div style={{ marginTop: 10, fontSize: '0.85rem' }}>
+                              {r.analysis.overall_feedback && (
+                                <div style={{ padding: '10px 14px', background: 'var(--surface2)', borderRadius: 8, marginBottom: 10, color: 'var(--text2)', lineHeight: 1.6 }}>
+                                  {r.analysis.overall_feedback}
                                 </div>
+                              )}
+                              {/* Strengths & Weaknesses */}
+                              {((r.analysis.strong_topics && r.analysis.strong_topics.length > 0) || (r.analysis.weak_topics && r.analysis.weak_topics.length > 0)) && (
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+                                  <div style={{ background: 'rgba(22,163,74,.06)', borderRadius: 8, padding: '10px 12px', border: '1px solid rgba(22,163,74,.2)' }}>
+                                    <div style={{ fontWeight: 700, color: '#16a34a', marginBottom: 8, fontSize: '0.82rem' }}>💪 Strengths</div>
+                                    {(r.analysis.strong_topics || []).length === 0
+                                      ? <div style={{ color: 'var(--text3)', fontSize: '0.78rem' }}>Keep practicing</div>
+                                      : (r.analysis.strong_topics || []).map(function(t, i) { return (
+                                        <div key={i} style={{ display: 'flex', gap: 5, marginBottom: 4 }}>
+                                          <span style={{ color: '#16a34a', flexShrink: 0 }}>✅</span>
+                                          <span style={{ fontSize: '0.8rem', color: 'var(--text2)' }}>{t}</span>
+                                        </div>); })
+                                    }
+                                  </div>
+                                  <div style={{ background: 'rgba(220,38,38,.06)', borderRadius: 8, padding: '10px 12px', border: '1px solid rgba(220,38,38,.2)' }}>
+                                    <div style={{ fontWeight: 700, color: '#dc2626', marginBottom: 8, fontSize: '0.82rem' }}>📌 Needs Work</div>
+                                    {(r.analysis.weak_topics || []).length === 0
+                                      ? <div style={{ color: 'var(--text3)', fontSize: '0.78rem' }}>No major gaps!</div>
+                                      : (r.analysis.weak_topics || []).map(function(t, i) { return (
+                                        <div key={i} style={{ display: 'flex', gap: 5, marginBottom: 4 }}>
+                                          <span style={{ color: '#dc2626', flexShrink: 0 }}>⚠️</span>
+                                          <span style={{ fontSize: '0.8rem', color: 'var(--text2)' }}>{t}</span>
+                                        </div>); })
+                                    }
+                                  </div>
+                                </div>
+                              )}
+                              {/* Tips */}
+                              {(r.analysis.improvement_tips || []).length > 0 && (
+                                <div style={{ marginBottom: 10 }}>
+                                  <div style={{ fontWeight: 700, marginBottom: 6, fontSize: '0.82rem' }}>📈 Tips</div>
+                                  {r.analysis.improvement_tips.map(function(t, i) { return (
+                                    <div key={i} style={{ fontSize: '0.8rem', padding: '3px 0', color: 'var(--text2)' }}>{i+1}. {t}</div>
+                                  ); })}
+                                </div>
+                              )}
+                              {r.analysis.predicted_exam_readiness && (
+                                <div style={{ padding: '6px 10px', background: 'var(--accent-glow)', borderRadius: 6, fontWeight: 700, color: 'var(--accent)', fontSize: '0.8rem', marginBottom: 10, display: 'inline-block' }}>
+                                  🎯 Readiness: {r.analysis.predicted_exam_readiness}
+                                </div>
+                              )}
+                              {/* YouTube links for weak topics */}
+                              {r.analysis.weak_topics && r.analysis.weak_topics.length > 0 && (
+                                <YouTubeResources weaknesses={r.analysis.weak_topics} subject={r.subject} />
                               )}
                             </div>
                           </details>

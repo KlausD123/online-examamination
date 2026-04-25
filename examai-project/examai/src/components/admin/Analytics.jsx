@@ -82,7 +82,6 @@ export default function Analytics() {
         {[
           { k:'overview', l:'📊 Overview' },
           { k:'exams',    l:'📝 Exam-wise Analysis' },
-          { k:'students', l:'👥 Student Performance' },
           { k:'conduct',  l:'🚫 Misconduct' },
         ].map(function(t) {
           return <button key={t.k} className={'tab-btn'+(tab===t.k?' active':'')} onClick={function(){setTab(t.k);}}>{t.l}</button>;

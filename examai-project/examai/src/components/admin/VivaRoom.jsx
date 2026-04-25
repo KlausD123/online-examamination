@@ -79,6 +79,8 @@ export default function VivaRoom() {
 
   var [phase,       setPhase]       = useState('setup');
   var [title,       setTitle]       = useState('');
+  var [vivaCourseId, setVivaCourseId] = useState('');
+  var [vivaCourses,  setVivaCourses]  = useState([]);
   var [topic,       setTopic]       = useState('');
   var savedVivaRef  = useRef(null);
 
@@ -800,7 +802,7 @@ export default function VivaRoom() {
     if (!title.trim()) return;
     setLoading(true);
     try {
-      var r = await apiPost('/viva', { title, topic, questions: [] });
+      var r = await apiPost('/viva', { title, topic, questions: [], course_id: vivaCourseId || null });
       var vivaData = { viva_id: r.viva_id, title, topic };
       savedVivaRef.current = vivaData;
       sessionStorage.setItem(SESSION_KEY, JSON.stringify(vivaData));
@@ -943,7 +945,16 @@ export default function VivaRoom() {
         <div className="card" style={{ textAlign: 'left' }}>
           <div className="form-group"><label className="form-label">Session Title *</label><input className="form-input" value={title} onChange={function(e) { setTitle(e.target.value); }} placeholder="e.g. CS Final Oral Viva"/></div>
           <div className="form-group"><label className="form-label">Topic / Subject</label><input className="form-input" value={topic} onChange={function(e) { setTopic(e.target.value); }} placeholder="e.g. Data Structures"/></div>
-          <div style={{ padding: '12px 14px', background: 'rgba(124,58,237,.1)', border: '1px solid rgba(124,58,237,.2)', borderRadius: 9, marginBottom: 18, fontSize: '0.82rem', color: '#a78bfa', lineHeight: 1.75 }}> </div>
+          <div className="form-group">
+            <label className="form-label">Visibility</label>
+            <select className="form-select" value={vivaCourseId} onChange={function(e){ setVivaCourseId(e.target.value); }}>
+              <option value="">🌐 Global — all students can join</option>
+              {vivaCourses.map(function(c){ return <option key={c.course_id} value={c.course_id}>🏫 {c.name} — course only</option>; })}
+            </select>
+            <div style={{ fontSize:'0.75rem', color:'var(--text3)', marginTop:4 }}>
+              {vivaCourseId ? 'Only enrolled students in this course will be invited' : 'Any student can be invited'}
+            </div>
+          </div>
           <button className="btn btn-primary btn-lg" style={{ width: '100%', justifyContent: 'center' }} onClick={handleStartRoom} disabled={loading || !title.trim()}>
             {loading ? 'Creating Room…' : '🚀 Create Viva Room'}
           </button>
