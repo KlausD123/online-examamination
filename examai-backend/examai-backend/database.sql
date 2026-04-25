@@ -127,6 +127,7 @@ CREATE TABLE IF NOT EXISTS viva_results (
   ai_report       JSON NULL,
   correct_count   INT DEFAULT 0,
   total_questions INT DEFAULT 0,
+  result_visible  TINYINT(1) DEFAULT 0,
   created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (viva_id) REFERENCES viva_sessions(viva_id)
 ) ENGINE=InnoDB;

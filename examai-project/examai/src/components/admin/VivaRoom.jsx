@@ -1112,6 +1112,19 @@ export default function VivaRoom() {
         <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
           <button className="btn btn-outline" onClick={function() { setPhase('results'); }}>← Review</button>
           <button className="btn btn-primary" onClick={resetForNextStudent}>👤 Next Student (Keep Room)</button>
+          <a className="btn btn-outline" href={(process.env.REACT_APP_API_URL||'http://localhost:5000') + '/api/viva/' + (savedVivaRef.current && savedVivaRef.current.viva_id) + '/export-csv'}
+            target="_blank" rel="noopener noreferrer">📥 Export CSV</a>
+          <button className="btn btn-outline btn-sm" onClick={function(){
+            var vivaId = savedVivaRef.current && savedVivaRef.current.viva_id;
+            var resultId = results && results.result_id;
+            if (!vivaId || !resultId) return;
+            var nowVisible = results.result_visible === 1;
+            apiPost('/viva/' + vivaId + '/result/' + resultId + '/visibility', { visible: !nowVisible })
+              .then(function(){ store.addToast('Result ' + (!nowVisible ? 'visible' : 'hidden') + ' for student', 'success'); })
+              .catch(function(){});
+          }}>
+            {results && results.result_visible === 1 ? '🙈 Hide from Student' : '👁 Show to Student'}
+          </button>
           <button className="btn btn-danger btn-sm" onClick={resetAll}>🔒 End Session</button>
         </div>
       </div>
@@ -1142,6 +1155,14 @@ export default function VivaRoom() {
           </button>
           <button className="btn btn-sm btn-outline" onClick={function() { setShowInvite(!showInvite); if (!showInvite) loadStudents(); }}>✉ Invite</button>
           <button className="btn btn-danger btn-sm" onClick={handleEndAndGrade} disabled={loading || transcript.length === 0}>⏹ End &amp; Grade</button>
+          {transcript.length === 0 && (
+            <button className="btn btn-warning btn-sm" onClick={function(){
+              if(window.confirm('End viva without grading? No score will be saved.')) {
+                var vivaId = savedVivaRef.current && savedVivaRef.current.viva_id;
+                if(vivaId) apiPost('/viva/' + vivaId + '/end', {}).then(function(){ setPhase('setup'); store.addToast('Viva ended', 'info'); }).catch(function(){});
+              }
+            }}>✕ End Without Grade</button>
+          )}
         </div>
       </div>
 

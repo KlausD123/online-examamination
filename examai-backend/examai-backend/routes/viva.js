@@ -35,7 +35,7 @@ router.get('/', requireAdmin, async (req, res) => {
 router.get('/my-results', authenticateToken, async (req, res) => {
   try {
     const [results] = await pool.query(
-      'SELECT r.*, s.title, s.topic FROM viva_results r JOIN viva_sessions s ON r.viva_id = s.viva_id WHERE r.student_id = ? ORDER BY r.created_at DESC',
+      'SELECT r.*, s.title, s.topic FROM viva_results r JOIN viva_sessions s ON r.viva_id = s.viva_id WHERE r.student_id = ? AND (r.result_visible = 1 OR r.result_visible IS NULL) ORDER BY r.created_at DESC',
       [req.user.user_id]
     );
     res.json(results);

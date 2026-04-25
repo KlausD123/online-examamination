@@ -298,29 +298,6 @@ export default function VivaPractice() {
         analysis: analysis, transcript: finalTranscript || transcript
       };
       setResults(r);
-
-      // Save to localStorage (separate from exam results)
-      var record = {
-        id:              Date.now(),
-        mode:            'viva',
-        subject:         topic,
-        difficulty:      'Adaptive',
-        total_questions: total,
-        correct:         correct,
-        score_pct:       avgPct,
-        grade:           grade,
-        date:            new Date().toISOString(),
-        analysis:        analysis ? {
-          overall_feedback:           analysis.overall_feedback,
-          strong_topics:              analysis.strong_topics,
-          weak_topics:                analysis.weak_topics,
-          improvement_tips:           analysis.improvement_tips,
-          predicted_exam_readiness:   analysis.predicted_exam_readiness,
-        } : null,
-      };
-      var prev = JSON.parse(localStorage.getItem('practice_results') || '[]');
-      prev.unshift(record);
-      localStorage.setItem('practice_results', JSON.stringify(prev.slice(0, 50)));
     } catch(e) {
       // Build basic analysis from transcript data even if AI fails
       var wrongAnswers = (finalTranscript || transcript).filter(function(e){ return e.verdict && !e.verdict.correct; }).map(function(e){ return e.question; });
@@ -334,6 +311,20 @@ export default function VivaPractice() {
       };
       setResults({ grade: grade, avgPct: avgPct, correct: correct, total: total, analysis: fallbackAnalysis, transcript: finalTranscript || transcript });
     }
+
+    // Always save to localStorage regardless of AI success/failure
+    try {
+      var savedAnalysis = (results && results.analysis) || null;
+      var record = {
+        id: Date.now(), mode: 'viva', subject: topic,
+        total_questions: total, correct: correct, score_pct: avgPct, grade: grade,
+        date: new Date().toISOString(),
+        analysis: savedAnalysis
+      };
+      var prev = JSON.parse(localStorage.getItem('practice_results') || '[]');
+      prev.unshift(record);
+      localStorage.setItem('practice_results', JSON.stringify(prev.slice(0, 50)));
+    } catch(saveErr) { console.warn('Could not save practice result:', saveErr); }
     setAnalyzing(false);
   }
 
