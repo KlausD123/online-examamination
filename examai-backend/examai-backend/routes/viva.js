@@ -49,6 +49,23 @@ router.get('/all-results', requireAdmin, async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── CSV data for export ───────────────────────────────────────
+router.get('/:viva_id/results-csv-data', requireAdmin, async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT vr.student_name, vr.total_score, vr.grade, vr.correct_count,
+        vr.total_questions, vr.created_at, vs.title, vs.topic,
+        u.email as student_email
+      FROM viva_results vr
+      JOIN viva_sessions vs ON vr.viva_id = vs.viva_id
+      LEFT JOIN users u ON vr.student_id = u.user_id
+      WHERE vr.viva_id = ?
+      ORDER BY vr.total_score DESC
+    `, [req.params.viva_id]);
+    res.json(rows);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── Export viva results as CSV ────────────────────────────────
 router.get('/:viva_id/export-csv', requireAdmin, async (req, res) => {
   try {

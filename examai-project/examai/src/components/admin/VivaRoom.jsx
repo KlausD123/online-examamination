@@ -1147,37 +1147,38 @@ export default function VivaRoom() {
         <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
           <button className="btn btn-outline" onClick={function() { setPhase('results'); }}>← Review</button>
           <button className="btn btn-primary" onClick={resetForNextStudent}>👤 Next Student (Keep Room)</button>
-          <button className="btn btn-outline" onClick={function(){
-              // Build CSV from transcript
-              var rows = ['Q,Question,Student Answer,Verdict,Score (%)'];
-              (transcript||[]).forEach(function(t, i){
-                var row = [
-                  i+1,
-                  '"'+(t.question||'').replace(/"/g,"'").slice(0,100)+'"',
-                  '"'+(t.student_said||'').replace(/"/g,"'").slice(0,200)+'"',
-                  t.verdict ? (t.verdict.verdict||'') : '',
-                  t.verdict ? (t.verdict.score_pct||0) : ''
-                ].join(',');
-                rows.push(row);
-              });
-              if (results) {
-                rows.push('');
-                rows.push('SUMMARY');
-                rows.push('Student,'+(results.student_name||'Unknown'));
-                rows.push('Score %,'+( results.total_score||0));
-                rows.push('Grade,'+(results.grade||'F'));
-                rows.push('Correct,'+(results.correct_count||0)+'/'+( results.total_questions||0));
+          <button className="btn btn-outline" onClick={async function(){
+              var vid = savedVivaRef.current && savedVivaRef.current.viva_id;
+              if (!vid) { alert('No viva session'); return; }
+              try {
+                var { apiGet } = require('../../utils/api');
+                var data = await apiGet('/viva/' + vid + '/results-csv-data');
+                var rows = ['Student,Email,Score (%),Grade,Correct,Total Questions,Session,Date'];
+                (data||[]).forEach(function(r){
+                  rows.push([r.student_name||'Unknown', r.student_email||'', r.total_score||0, r.grade||'F', r.correct_count||0, r.total_questions||0, (r.title||'').replace(/,/g,' '), new Date(r.created_at).toLocaleDateString()].join(','));
+                });
+                // Also add transcript
+                if (transcript && transcript.length > 0) {
+                  rows.push(''); rows.push('Q,Question,Answer,Verdict,Score%');
+                  transcript.forEach(function(t,i){
+                    rows.push([i+1, '"'+(t.question||'').replace(/"/g,"'")+'"', '"'+(t.student_said||'').replace(/"/g,"'")+'"', t.verdict?t.verdict.verdict:'', t.verdict?t.verdict.score_pct:0].join(','));
+                  });
+                }
+                var blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+                var url = URL.createObjectURL(blob);
+                var a = document.createElement('a');
+                a.href = url; a.download = (title||'viva').replace(/[^a-z0-9]/gi,'_')+'_results.csv';
+                document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+              } catch(e) {
+                // Fallback to transcript only
+                var rows2 = ['Q,Question,Answer,Verdict,Score%'];
+                (transcript||[]).forEach(function(t,i){ rows2.push([i+1,'"'+(t.question||'')+'"','"'+(t.student_said||'')+'"',t.verdict?t.verdict.verdict:'',t.verdict?t.verdict.score_pct:0].join(',')); });
+                var blob2 = new Blob([rows2.join('\n')],{type:'text/csv'});
+                var url2 = URL.createObjectURL(blob2);
+                var a2 = document.createElement('a'); a2.href=url2; a2.download='viva_transcript.csv';
+                document.body.appendChild(a2); a2.click(); document.body.removeChild(a2); URL.revokeObjectURL(url2);
               }
-              var csv = rows.join('\n');
-              var blob = new Blob([csv], { type: 'text/csv' });
-              var url = URL.createObjectURL(blob);
-              var a = document.createElement('a');
-              a.href = url;
-              a.download = (title||'viva').replace(/[^a-z0-9]/gi,'_') + '_results.csv';
-              document.body.appendChild(a);
-              a.click();
-              document.body.removeChild(a);
-              URL.revokeObjectURL(url);
             }}>📥 Export CSV</button>
           <button className="btn btn-outline btn-sm" onClick={function(){
             var vivaId = savedVivaRef.current && savedVivaRef.current.viva_id;

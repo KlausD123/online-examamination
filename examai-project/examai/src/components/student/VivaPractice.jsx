@@ -186,34 +186,19 @@ export default function VivaPractice() {
   }
 
   async function startListening() {
-    if (!SR) {
-      setRecording(false); recordingRef.current = false;
-      store.addToast('Speech recognition not supported. Please use Chrome.', 'error');
-      return;
-    }
-    // Request mic permission first
-    try {
-      await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch(micErr) {
-      store.addToast('Microphone access denied — please allow mic and try again', 'error');
-      setRecording(false); recordingRef.current = false;
-      return;
-    }
-
-    if (recRef.current) { try { recRef.current.abort(); } catch(e){} recRef.current = null; }
     clearTimeout(silenceTimer.current);
     liveTextRef.current = '';
     setLiveText(''); setInterimText('');
-    setRecording(true); recordingRef.current = true; recordingStartTime.current = Date.now();
+    setRecording(true); recordingRef.current = true;
+    recordingStartTime.current = Date.now();
 
-    function makeRec() {
+    // Try Web Speech API first (Chrome/Edge)
+    if (SR) {
+      try { await navigator.mediaDevices.getUserMedia({ audio: true }); } catch(e) {}
       var r = new SR();
-      r.continuous = false; // simpler — one shot per utterance
+      r.continuous = true;
       r.interimResults = true;
       r.lang = 'en-US';
-      r.maxAlternatives = 3;
-
-      r.onstart = function() { console.log('[STT] Started listening'); };
 
       r.onresult = function(e) {
         clearTimeout(silenceTimer.current);
@@ -222,61 +207,36 @@ export default function VivaPractice() {
           if (e.results[i].isFinal) final += e.results[i][0].transcript + ' ';
           else interim += e.results[i][0].transcript;
         }
-        if (final) {
-          liveTextRef.current += final;
-          setLiveText(liveTextRef.current);
-          console.log('[STT] Got:', final.trim());
-        }
+        if (final) { liveTextRef.current += final; setLiveText(liveTextRef.current.trim()); }
         if (interim) setInterimText(interim);
-        // Reset silence timer
         silenceTimer.current = setTimeout(function() {
           if (recordingRef.current) stopListeningAndGrade();
-        }, 4000);
+        }, 3500);
       };
 
-      r.onerror = function(e) {
-        console.warn('[STT] Error:', e.error);
-        if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+      r.onerror = function(ev) {
+        if (ev.error === 'not-allowed') {
           setRecording(false); recordingRef.current = false;
-          alert('Microphone access denied. Please allow mic in browser settings.');
-          return;
-        }
-        // Restart on other errors
-        if (recordingRef.current && flowActive.current) {
-          setTimeout(function() { if (recordingRef.current) { recRef.current = makeRec(); try { recRef.current.start(); } catch(e2){} } }, 300);
+          store.addToast('Mic denied — allow microphone in browser settings', 'error');
         }
       };
 
       r.onend = function() {
-        console.log('[STT] Ended, text so far:', liveTextRef.current);
-        if (!recordingRef.current || !flowActive.current) return;
-        // Restart to keep listening
-        setTimeout(function() {
-          if (recordingRef.current && flowActive.current) {
-            recRef.current = makeRec();
-            try { recRef.current.start(); }
-            catch(e3) { console.warn('[STT] Restart failed:', e3); }
+        if (recordingRef.current && flowActive.current) {
+          try { r.start(); } catch(e) {
+            // SR ended — grade what we have
+            if (liveTextRef.current.trim().length > 0) stopListeningAndGrade();
+            else { setRecording(false); recordingRef.current = false; }
           }
-        }, 100);
+        }
       };
 
-      return r;
+      try { r.start(); recRef.current = r; return; } catch(e) { console.warn('SR start failed:', e); }
     }
 
-    recRef.current = makeRec();
-    try {
-      recRef.current.start();
-      // Fallback: if nothing captured after 8s, end
-      silenceTimer.current = setTimeout(function() {
-        if (recordingRef.current && liveTextRef.current.trim().length === 0) {
-          console.log('[STT] No speech detected, auto-ending');
-          stopListeningAndGrade();
-        }
-      }, 8000);
-    } catch(e) {
-      console.warn('[STT] Start failed:', e);
-      setRecording(false); recordingRef.current = false;
-    }
+    // Fallback: show type box
+    setRecording(false); recordingRef.current = false;
+    store.addToast('Voice not supported — please type your answer below', 'warning');
   }
 
   function stopListening() {
