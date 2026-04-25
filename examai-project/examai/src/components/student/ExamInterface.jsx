@@ -154,13 +154,26 @@ export default function ExamInterface({ exam, submissionId, onComplete }) {
       var count = await checkFrameWithGroq(videoRef.current);
       setFaceCount(count);
       if (count === 0) {
-        noFaceFramesRef.current++; setFaceStatus('no_face');
-        if (noFaceFramesRef.current >= 2) { noFaceFramesRef.current = 0; triggerViolation('No person detected — please stay in frame'); }
+        noFaceFramesRef.current++;
+        setFaceStatus('no_face');
+        // Trigger after 3 consecutive checks (15s) — avoid false positives
+        if (noFaceFramesRef.current >= 3) {
+          noFaceFramesRef.current = 0;
+          triggerViolation('No person detected in camera for extended time');
+        }
       } else if (count > 1) {
-        multiFaceFramesRef.current++; noFaceFramesRef.current = 0; setFaceStatus('multiple');
-        if (multiFaceFramesRef.current >= 2) { multiFaceFramesRef.current = 0; triggerViolation('Multiple people detected — only exam taker should be visible'); }
+        multiFaceFramesRef.current++;
+        noFaceFramesRef.current = 0;
+        setFaceStatus('multiple');
+        // IMMEDIATE violation on first confirmed multi-person detection
+        if (multiFaceFramesRef.current >= 1) {
+          multiFaceFramesRef.current = 0;
+          triggerViolation('Multiple people detected in camera — only you should be visible');
+        }
       } else {
-        noFaceFramesRef.current = 0; multiFaceFramesRef.current = 0; setFaceStatus('ok');
+        noFaceFramesRef.current = 0;
+        multiFaceFramesRef.current = 0;
+        setFaceStatus('ok');
       }
     }, 5000); // Check every 5 seconds
   }

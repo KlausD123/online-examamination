@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { apiGet } from '../../utils/api';
+import { getGradeColor } from '../../utils/helpers';
 
 export default function CourseAnalytics() {
   var [courses, setCourses] = useState([]);
@@ -7,6 +8,7 @@ export default function CourseAnalytics() {
   var [stats, setStats] = useState(null);
   var [loading, setLoading] = useState(true);
   var [statsLoading, setStatsLoading] = useState(false);
+  var [leaderboard, setLeaderboard] = useState([]);
 
   useEffect(function() {
     apiGet('/courses').then(function(d) {
@@ -23,8 +25,14 @@ export default function CourseAnalytics() {
         apiGet('/courses/' + course.course_id + '/members'),
         apiGet('/exams'),
       ]);
-      // Filter exams for this course
       var courseExams = (exams||[]).filter(function(e){ return String(e.course_id) === String(course.course_id); });
+      // Build leaderboard from submissions
+      var lb = [];
+      try {
+        var lbData = await apiGet('/exams/course/' + course.course_id + '/leaderboard');
+        lb = lbData || [];
+      } catch(e) {}
+      setLeaderboard(lb);
       setStats({ members: members||[], exams: courseExams });
     } catch(e) {}
     setStatsLoading(false);
@@ -103,6 +111,37 @@ export default function CourseAnalytics() {
                     </table>
                   </div>
                 )}
+
+                {/* Course Leaderboard */}
+                <div className="card" style={{ marginBottom:20 }}>
+                  <div style={{ fontWeight:700, marginBottom:12 }}>🏆 Course Leaderboard</div>
+                  {leaderboard.length === 0
+                    ? <div style={{ color:'var(--text3)', fontSize:'0.85rem', textAlign:'center', padding:'10px 0' }}>No exam results yet</div>
+                    : <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.85rem' }}>
+                      <thead><tr style={{ borderBottom:'2px solid var(--border)' }}>
+                        <th style={{ textAlign:'left', padding:'8px 8px', color:'var(--text3)' }}>Rank</th>
+                        <th style={{ textAlign:'left', padding:'8px 8px', color:'var(--text3)' }}>Student</th>
+                        <th style={{ textAlign:'center', padding:'8px 8px', color:'var(--text3)' }}>Avg Score</th>
+                        <th style={{ textAlign:'center', padding:'8px 8px', color:'var(--text3)' }}>Grade</th>
+                        <th style={{ textAlign:'center', padding:'8px 8px', color:'var(--text3)' }}>Exams</th>
+                      </tr></thead>
+                      <tbody>
+                        {leaderboard.map(function(s, i) {
+                          var medal = i===0?'🥇':i===1?'🥈':i===2?'🥉':(i+1);
+                          return (
+                            <tr key={i} style={{ borderBottom:'1px solid var(--border)', background:i<3?'rgba(124,58,237,.03)':'transparent' }}>
+                              <td style={{ padding:'10px 8px', fontWeight:700, fontSize:'1.1rem' }}>{medal}</td>
+                              <td style={{ padding:'10px 8px' }}><div style={{ fontWeight:600 }}>{s.name}</div><div style={{ fontSize:'0.75rem', color:'var(--text3)' }}>{s.year||''}</div></td>
+                              <td style={{ padding:'10px 8px', textAlign:'center', fontFamily:'JetBrains Mono,monospace', fontWeight:700 }}>{Number(s.avg_score||0).toFixed(1)}%</td>
+                              <td style={{ padding:'10px 8px', textAlign:'center' }}><span style={{ fontWeight:800, color:getGradeColor(s.grade) }}>{s.grade||'-'}</span></td>
+                              <td style={{ padding:'10px 8px', textAlign:'center', color:'var(--text3)' }}>{s.exam_count||0}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  }
+                </div>
 
                 {/* Members */}
                 {stats.members.length > 0 && (

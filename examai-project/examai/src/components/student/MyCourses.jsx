@@ -42,24 +42,63 @@ export default function MyCourses() {
     <div className="fade-up">
       <div className="page-title" style={{ marginBottom: 20 }}>🏫 My Courses</div>
 
-      {/* Join course */}
-      <div className="card" style={{ marginBottom: 24, maxWidth: 480 }}>
-        <div style={{ fontWeight: 700, marginBottom: 12 }}>Join a Course</div>
-        <form onSubmit={handleJoin} style={{ display:'flex', gap:8 }}>
-          <input
-            className="form-input"
-            value={code}
-            onChange={function(e){setCode(e.target.value.toUpperCase());}}
-            placeholder="Enter 6-character code (e.g. ABC123)"
-            maxLength={12}
-            style={{ flex:1, fontFamily:'JetBrains Mono,monospace', letterSpacing:2, fontWeight:700, fontSize:'1rem' }}
-          />
-          <button className="btn btn-primary" disabled={joining || !code.trim()}>
-            {joining ? 'Joining…' : 'Join'}
+      {/* Join course — 6 box code input */}
+      <div className="card" style={{ marginBottom: 24, maxWidth: 460 }}>
+        <div style={{ fontWeight: 700, fontSize:'1.1rem', marginBottom: 6 }}>Join a Course</div>
+        <div style={{ fontSize:'0.82rem', color:'var(--text3)', marginBottom: 20 }}>Enter the 6-character code from your teacher</div>
+        <form onSubmit={handleJoin}>
+          <div style={{ display:'flex', gap:10, justifyContent:'center', marginBottom:20 }}>
+            {[0,1,2,3,4,5].map(function(i) {
+              return (
+                <input key={i} id={'code-box-'+i} maxLength={1}
+                  value={code[i]||''}
+                  onChange={function(e) {
+                    var val = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g,'');
+                    var arr = (code+'      ').split('').slice(0,6);
+                    arr[i] = val;
+                    var newCode = arr.join('').trim();
+                    setCode(newCode);
+                    // Auto-focus next
+                    if (val && i < 5) {
+                      var next = document.getElementById('code-box-'+(i+1));
+                      if (next) next.focus();
+                    }
+                  }}
+                  onKeyDown={function(e) {
+                    if (e.key==='Backspace' && !code[i] && i > 0) {
+                      var prev = document.getElementById('code-box-'+(i-1));
+                      if (prev) { prev.focus(); var arr=(code+'      ').split('').slice(0,6); arr[i-1]=''; setCode(arr.join('').trim()); }
+                    }
+                    if (e.key==='Enter') handleJoin(e);
+                  }}
+                  onPaste={function(e) {
+                    e.preventDefault();
+                    var pasted = e.clipboardData.getData('text').toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,6);
+                    setCode(pasted);
+                    var last = document.getElementById('code-box-'+(Math.min(pasted.length,5)));
+                    if (last) last.focus();
+                  }}
+                  style={{
+                    width:52, height:60, textAlign:'center',
+                    fontSize:'1.6rem', fontWeight:800,
+                    fontFamily:'JetBrains Mono,monospace',
+                    border:'2px solid '+(code[i]?'var(--accent)':'var(--border)'),
+                    borderRadius:12, background:code[i]?'var(--accent-glow)':'var(--surface)',
+                    color:'var(--text)', outline:'none',
+                    transition:'var(--transition)', letterSpacing:0,
+                    boxShadow:code[i]?'0 0 0 3px var(--accent-glow)':'none'
+                  }}
+                />
+              );
+            })}
+          </div>
+          {error   && <div style={{ color:'var(--danger)', fontSize:'0.82rem', marginBottom:10, textAlign:'center' }}>❌ {error}</div>}
+          {success && <div style={{ color:'var(--success)', fontSize:'0.82rem', marginBottom:10, textAlign:'center' }}>✅ {success}</div>}
+          <button className="btn btn-primary" style={{ width:'100%', justifyContent:'center' }}
+            disabled={joining || code.replace(/\s/g,'').length < 6}>
+            {joining ? 'Joining…' : '🚀 Join Course'}
           </button>
         </form>
-        {error   && <div style={{ color:'var(--danger)', fontSize:'0.82rem', marginTop:8 }}>❌ {error}</div>}
-        {success && <div style={{ color:'var(--success)', fontSize:'0.82rem', marginTop:8 }}>✅ {success}</div>}
       </div>
 
       {/* My courses */}

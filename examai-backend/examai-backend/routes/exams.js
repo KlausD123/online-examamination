@@ -113,6 +113,35 @@ router.post('/:id/unpublish', requireAdmin, async (req, res) => {
 });
 
 
+// Course leaderboard
+router.get('/course/:course_id/leaderboard', authenticateToken, async (req, res) => {
+  try {
+    const [results] = await pool.query(`
+      SELECT u.name, s.year, s.department,
+        AVG(r.total_score) as avg_score,
+        COUNT(DISTINCT sub.exam_id) as exam_count,
+        CASE
+          WHEN AVG(r.total_score) >= 90 THEN 'A+'
+          WHEN AVG(r.total_score) >= 80 THEN 'A'
+          WHEN AVG(r.total_score) >= 70 THEN 'B'
+          WHEN AVG(r.total_score) >= 60 THEN 'C'
+          WHEN AVG(r.total_score) >= 50 THEN 'D'
+          ELSE 'F'
+        END as grade
+      FROM results r
+      JOIN submissions sub ON r.submission_id = sub.submission_id
+      JOIN exams e ON sub.exam_id = e.exam_id
+      JOIN users u ON sub.student_id = u.user_id
+      LEFT JOIN students s ON u.user_id = s.user_id
+      WHERE e.course_id = ? AND sub.status IN ('submitted','cheated')
+      GROUP BY u.user_id, u.name, s.year, s.department
+      ORDER BY avg_score DESC
+      LIMIT 50
+    `, [req.params.course_id]);
+    res.json(results);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // Global leaderboard — average score across all exams
 router.get('/global/leaderboard', authenticateToken, async (req, res) => {
   try {

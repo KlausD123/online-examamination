@@ -70,7 +70,10 @@ body {
 .topbar-nav {
   display: flex; align-items: center; gap: 4px;
   margin-left: 32px; flex: 1;
+  overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none;
 }
+.topbar-nav::-webkit-scrollbar { display: none; }
 .topbar-nav button {
   padding: 8px 16px; border: none; background: transparent;
   font-family: 'Space Grotesk', sans-serif; font-size: 0.875rem;
