@@ -624,22 +624,48 @@ export default function VivaRoom() {
     capturedRef.current = ''; setCapturedText(''); setLiveWords('');
 
     if (socketRef.current && socketRef.current.connected && vivaId) {
-      // noTTS flag tells student: just show text, don't speak it
       socketRef.current.emit('question-text', { vivaId: vivaId, text: text, noTTS: !!noTTS });
     } else {
       store.addToast('Socket not connected — student may not receive question', 'warning');
     }
 
     if (noTTS) {
-      // Manual mode: student already heard it live — start Whisper immediately
-      setFlow('listening'); flowRef.current = 'listening';
-      setStatusMsg('');
-      // Small delay so student has a moment before recording starts
-      setTimeout(startSTT, 800);
-    } else {
-      // Generated mode: wait for student TTS to finish before recording
+      // Manual mode: student already heard admin's live voice via Jitsi
+      // Admin reads own question text aloud too (confirmation), then start Whisper
       setFlow('speaking'); flowRef.current = 'speaking';
-      setStatusMsg('Student is hearing the question… mic starts after');
+      setStatusMsg('');
+      if (synthRef.current && window.speechSynthesis) {
+        synthRef.current.cancel();
+        var utt = new SpeechSynthesisUtterance(text);
+        utt.rate = 0.9; utt.lang = 'en-US';
+        var done = false;
+        function afterAdminTTS() {
+          if (done) return; done = true;
+          setFlow('listening'); flowRef.current = 'listening';
+          setStatusMsg('');
+          setTimeout(startSTT, 400);
+        }
+        utt.onend = afterAdminTTS; utt.onerror = afterAdminTTS;
+        synthRef.current.speak(utt);
+        // Fallback
+        setTimeout(function() { if (flowRef.current === 'speaking') afterAdminTTS(); }, Math.max(3000, text.length * 75 + 1500));
+      } else {
+        setFlow('listening'); flowRef.current = 'listening';
+        setTimeout(startSTT, 800);
+      }
+    } else {
+      // Generated mode: admin hears question via TTS, student TTS plays on their device
+      setFlow('speaking'); flowRef.current = 'speaking';
+      setStatusMsg('');
+      // Admin TTS plays question aloud
+      if (synthRef.current && window.speechSynthesis) {
+        synthRef.current.cancel();
+        var utt2 = new SpeechSynthesisUtterance(text);
+        utt2.rate = 0.9; utt2.lang = 'en-US';
+        utt2.onend = utt2.onerror = function() { /* admin TTS done — now wait for student tts-done */ };
+        synthRef.current.speak(utt2);
+      }
+      // Wait for student tts-done signal; fallback timer as safety net
       var estimatedMs = Math.max(4000, text.length * 75 + 2000);
       ttsWaitTimer.current = setTimeout(function() {
         if (flowRef.current === 'speaking') {
@@ -837,13 +863,17 @@ export default function VivaRoom() {
     if (!lastT) return;
     setFollowUpLoading(true); setFollowUpQ('');
     try {
-      var prompt = 'Original question: ' + lastT.question + '\nStudent answered: ' + (lastT.student_said || 'no answer') + '\nMissing points: ' + (lastT.missing || 'none') + '\n\nGenerate ONE concise follow-up question (max 20 words) to probe deeper or clarify what was missing. Return only the question text, no quotes.';
+      var prompt = 'Original question: ' + lastT.question +
+        '\nStudent answered: ' + (lastT.student_said || 'no answer') +
+        '\nMissing points: ' + (lastT.missing || 'none') +
+        '\n\nGenerate ONE concise follow-up question (max 20 words) to probe deeper or clarify what was missing. Return only the question text, no quotes or punctuation at start/end.';
       var resp = await groqChat('You are a viva examiner generating one focused follow-up question.', prompt, 80, 0.7);
-      var fq = (resp || '').trim().replace(/^["']|["']$/g, '');
+      var fq = (resp || '').trim().replace(/^["']+|["']+$/g, '').trim();
       setFollowUpQ(fq);
-    } catch(e) { setFollowUpQ('Could not generate follow-up: ' + e.message); }
+    } catch(e) { setFollowUpQ('Could not generate: ' + e.message); }
     setFollowUpLoading(false);
   }
+
 
   async function handleManualGrade() {
     var ans = manualText.trim() || capturedRef.current.trim();
@@ -1069,6 +1099,8 @@ export default function VivaRoom() {
       var total = graded.length > 0 ? Math.round(graded.reduce(function(a, e) { return a + (e.score_pct || 0); }, 0) / graded.length) : 0;
       var grade = total >= 90 ? 'A+' : total >= 80 ? 'A' : total >= 70 ? 'B' : total >= 60 ? 'C' : total >= 50 ? 'D' : 'F';
       setResults({ total_score: total, grade, correct_count: graded.filter(function(e) { return e.correct; }).length, overall_feedback: report.overall_feedback });
+      // Auto-load students so picker is ready immediately
+      loadStudents();
       setPhase('results');
     } catch(e) { store.addToast('Error: ' + e.message, 'error'); setPhase('room'); }
     setLoading(false);
@@ -1118,6 +1150,7 @@ export default function VivaRoom() {
             correct_count:   cc,
             total_questions: editableAns.length,
             student_name:    selStudentName || 'Unknown Student',
+            topic:           topic || title,
           }),
         });
       }
@@ -1237,12 +1270,51 @@ export default function VivaRoom() {
     var gc2 = gcol(gradeNow);
     return (
       <div className="fade-up">
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
           <div>
             <div className="page-title">📊 Oral Viva Results</div>
-            <div style={{ fontSize: '0.82rem', color: 'var(--text3)', marginTop: 3 }}>AI-graded live. Review &amp; edit below, then Finalize to save.</div>
+            <div style={{ fontSize: '0.82rem', color: 'var(--text3)', marginTop: 3 }}>
+              Topic: <strong>{topic || title}</strong> · {editableAns.length} questions · Review &amp; edit, then Finalize to save student-wise.
+            </div>
           </div>
-          <button className="btn btn-success" onClick={handleFinalize} disabled={finalizing}>{finalizing ? 'Saving…' : '✅ Finalize & Save'}</button>
+          <button className="btn btn-success" onClick={handleFinalize} disabled={finalizing || !selStudentId}>
+            {finalizing ? 'Saving…' : '✅ Finalize & Save'}
+          </button>
+        </div>
+
+        {/* ── Student picker — required before saving ── */}
+        <div className="card" style={{ marginBottom: 16, borderLeft: '4px solid ' + (selStudentId ? '#22c55e' : '#f59e0b') }}>
+          <div style={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: 1, marginBottom: 10, fontFamily: 'JetBrains Mono,monospace', color: selStudentId ? '#4ade80' : '#fbbf24' }}>
+            {selStudentId ? '✅ STUDENT SELECTED' : '⚠️ SELECT STUDENT TO SAVE RESULT'}
+          </div>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <select className="form-select" style={{ flex: 1, minWidth: 200, background: 'rgba(255,255,255,.06)', border: '1px solid rgba(255,255,255,.15)', color: '#e5e5e5' }}
+              value={selStudentId || ''}
+              onChange={function(e) {
+                var sid = e.target.value;
+                var stu = students.find(function(s) { return String(s.user_id) === String(sid); });
+                setSelStudentId(sid || null);
+                setSelStudentName(stu ? stu.name : '');
+              }}>
+              <option value="">— Select student —</option>
+              {students.map(function(s) {
+                return <option key={s.user_id} value={s.user_id}>{s.name} ({s.email})</option>;
+              })}
+            </select>
+            {students.length === 0 && (
+              <button className="btn btn-outline btn-sm" onClick={loadStudents}>Load Students</button>
+            )}
+          </div>
+          {selStudentId && (
+            <div style={{ marginTop: 8, fontSize: '0.78rem', color: '#4ade80' }}>
+              Saving result for: <strong>{selStudentName}</strong> · Topic: <strong>{topic || title}</strong>
+            </div>
+          )}
+          {!selStudentId && (
+            <div style={{ marginTop: 8, fontSize: '0.75rem', color: '#9ca3af' }}>
+              Result will be stored under the student's account in the Viva tab of My Results.
+            </div>
+          )}
         </div>
 
         {/* Score card */}
