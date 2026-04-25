@@ -6,8 +6,8 @@ import ResultView from './ResultView';
 
 export default function AvailableExams({ navigate }) {
   var store = useStore();
-  var [exams, setExams] = useState([]);
-  var [subs, setSubs] = useState([]);
+  var [exams, setExams] = useState(store.exams || []);
+  var [subs, setSubs] = useState(store.submissions || []);
   var [loading, setLoading] = useState(true);
   var [filter, setFilter] = useState('All');
   var [activeExam, setActiveExam] = useState(null);

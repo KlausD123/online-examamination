@@ -152,7 +152,7 @@ export default function VivaPractice() {
 
     liveTextRef.current = '';
     setLiveText(''); setInterimText('');
-    setRecording(true); recordingRef.current = true;
+    setRecording(true); recordingRef.current = true; recordingStartTime.current = Date.now();
 
     var rec = new SR();
     rec.continuous = true;
@@ -168,10 +168,13 @@ export default function VivaPractice() {
       liveTextRef.current = txt;
       setLiveText(txt);
       setInterimText('');
-      // After 2s of no new speech, auto-grade
+      // Min 3s recording before grading, then 3s silence triggers grade
+      var elapsed = Date.now() - (recordingStartTime.current || Date.now());
+      var wait = elapsed < 3000 ? (3000 - elapsed + 1500) : 3000;
+      clearTimeout(silenceTimer.current);
       silenceTimer.current = setTimeout(function() {
         if (recordingRef.current) stopListeningAndGrade();
-      }, 1500);
+      }, wait);
     };
 
     rec.onerror = function(e) {
@@ -485,6 +488,7 @@ export default function VivaPractice() {
                   <button className="btn btn-ghost btn-sm" onClick={function(){speakText(q.question);}} disabled={speaking}>
                     {speaking ? '🔊 Speaking...' : '🔊 Read Aloud'}
                   </button>
+                  </div>
                 )}
               </div>
               <div style={{ fontSize: '1.1rem', fontWeight: 600, lineHeight: 1.55, color: 'var(--text)' }}>{q.question}</div>
@@ -510,7 +514,16 @@ export default function VivaPractice() {
                     <button className="btn btn-primary btn-sm" onClick={function(){flowActive.current=true; startListening();}}>🎤 Start</button>
                   )}
                   {recording && (
-                    <button className="btn btn-warning btn-sm" onClick={function(){stopListeningAndGrade();}}>✋ Grade Now</button>
+                    <div style={{ display:'flex', gap:8 }}>
+                      <button className="btn btn-outline btn-sm" onClick={function(){
+                        flowActive.current = false;
+                        clearTimeout(silenceTimer.current);
+                        stopListening();
+                        synthRef.current && synthRef.current.cancel();
+                        window.speechSynthesis && window.speechSynthesis.cancel();
+                      }}>⏸ Pause</button>
+                      <button className="btn btn-warning btn-sm" onClick={function(){stopListeningAndGrade();}}>✋ Grade Now</button>
+                    </div>
                   )}
                   {verdict && !grading && !speaking && (
                     <button className="btn btn-success btn-sm" onClick={handleNext}>Next →</button>
