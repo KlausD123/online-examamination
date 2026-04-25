@@ -313,9 +313,8 @@ export default function VivaPractice() {
       // Validate — clear strengths if no correct answers
       if (correct === 0 && analysis.strong_topics) analysis.strong_topics = [];
       var r = {
-      var r = {
         grade: grade, avgPct: avgPct, correct: correct, total: total,
-        analysis: analysis, transcript: finalTranscript || transcript
+        analysis: analysis, transcript: tData
       };
       setResults(r);
       // Save with full analysis
