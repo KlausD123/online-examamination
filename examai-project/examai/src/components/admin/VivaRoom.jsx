@@ -18,15 +18,18 @@ function getToken() { return localStorage.getItem('examai_token'); }
 function restoreSession() { try { return JSON.parse(sessionStorage.getItem(SESSION_KEY) || 'null'); } catch(e) { return null; } }
 
 async function gradeSpokenAnswer(question, modelAnswer, studentSaid) {
+  // Manual mode questions have no model answer — only transcript is saved, no grading
+  if (!modelAnswer || !modelAnswer.trim()) {
+    return { correct: null, score_pct: null, verdict: 'Transcript Only', feedback: '', missing: '' };
+  }
   if (!studentSaid || !studentSaid.trim())
     return { correct: false, score_pct: 0, verdict: 'No Answer', feedback: 'Student did not respond.', missing: modelAnswer };
   try {
     var raw = await groqChat(
       'You are an experienced oral viva examiner. Students speak conversationally — judge whether they understand the CONCEPT, not whether they match exact words. A short clear answer showing understanding scores well. Return ONLY valid JSON.',
       'Question: ' + question +
-      '\nModel Answer (reference only — student need not match this exactly): ' + modelAnswer +
+      '\nModel Answer (reference only): ' + modelAnswer +
       '\nStudent Spoken Answer: ' + studentSaid +
-      '\nEvaluate: Does the student grasp the core concept? Did they cover the key idea(s) even if briefly or in their own words?' +
       '\nReturn: {"correct":bool,"score_pct":0-100,"verdict":"Correct|Partially Correct|Incorrect","feedback":"2-3 sentences on what was good and what was missing","missing":"key concept missed or None"}',
       400, 0.2
     );
@@ -578,6 +581,16 @@ export default function VivaRoom() {
       }
     });
 
+    // Student TTS finished reading the question → now safe to start Whisper
+    sock.on('tts-done', function() {
+      clearTimeout(ttsWaitTimer.current);
+      if (flowRef.current === 'speaking') {
+        setFlow('listening'); flowRef.current = 'listening';
+        setStatusMsg('');
+        startSTT();
+      }
+    });
+
     // Student sends live words as they speak → show in admin capture box
     sock.on('student-answer-live', function(data) {
       if (flowRef.current !== 'listening') return;
@@ -602,26 +615,45 @@ export default function VivaRoom() {
     sock.on('connect_error', function(e) { console.error('[Admin] socket error:', e.message); });
   }
 
-  // ── Send question to student via socket (student TTS reads it) ──
-  function speakAndListen(text) {
+  // ── Send question to student ─────────────────────────────────────
+  // noTTS=true  → manual mode: student already heard admin's live voice via Jitsi,
+  //               just show text on screen and start Whisper immediately
+  // noTTS=false → generated mode: student TTS reads the text, then Whisper starts
+  function speakAndListen(text, noTTS) {
     var vivaId = savedVivaRef.current ? savedVivaRef.current.viva_id : null;
+    stopSTT();
+    capturedRef.current = ''; setCapturedText(''); setLiveWords('');
+
     if (socketRef.current && socketRef.current.connected && vivaId) {
-      socketRef.current.emit('question-text', { vivaId: vivaId, text: text });
+      // noTTS flag tells student: just show text, don't speak it
+      socketRef.current.emit('question-text', { vivaId: vivaId, text: text, noTTS: !!noTTS });
     } else {
       store.addToast('Socket not connected — student may not receive question', 'warning');
     }
-    // Clear previous answer and move to listening
-    capturedRef.current = ''; setCapturedText(''); setLiveWords('');
-    setFlow('speaking'); flowRef.current = 'speaking'; setStatusMsg('Question sent to student…');
-    // Short delay then start STT — admin's mic picks up student's voice through Jitsi
-    setTimeout(function() {
+
+    if (noTTS) {
+      // Manual mode: student already heard it live — start Whisper immediately
       setFlow('listening'); flowRef.current = 'listening';
       setStatusMsg('');
-      startSTT();
-    }, 2000);
+      // Small delay so student has a moment before recording starts
+      setTimeout(startSTT, 800);
+    } else {
+      // Generated mode: wait for student TTS to finish before recording
+      setFlow('speaking'); flowRef.current = 'speaking';
+      setStatusMsg('Student is hearing the question… mic starts after');
+      var estimatedMs = Math.max(4000, text.length * 75 + 2000);
+      ttsWaitTimer.current = setTimeout(function() {
+        if (flowRef.current === 'speaking') {
+          setFlow('listening'); flowRef.current = 'listening';
+          setStatusMsg('');
+          startSTT();
+        }
+      }, estimatedMs);
+    }
   }
 
   // ── Groq Whisper STT — records admin mic (hears student via Jitsi) ──
+  var ttsWaitTimer   = useRef(null);   // Fallback timer waiting for student TTS to finish
   var mediaRecRef    = useRef(null);   // MediaRecorder
   var audioChunks    = useRef([]);
   var whisperTimer   = useRef(null);
@@ -830,8 +862,12 @@ export default function VivaRoom() {
   var [mqPhase,      setMQPhase]      = useState('idle'); // idle | recording_q | recorded | listening
   var manualQRef     = useRef('');
 
+  // ── Admin records their spoken question using Web Speech API (SR only, no Whisper) ──
+  var adminSRRef = useRef(null); // separate SR instance just for admin question recording
+
   function startRecordAdminQ() {
-    if (!SR) { setStatusMsg('No speech recognition available'); return; }
+    if (!SR) { setStatusMsg('No speech recognition — type your question instead'); return; }
+    // Stop any running Whisper loop first — admin mic is now for question, not answer
     stopSTT();
     manualQRef.current = '';
     setManualQText(''); setMQPhase('recording_q');
@@ -844,28 +880,46 @@ export default function VivaRoom() {
         if (e.results[i].isFinal) fin += e.results[i][0].transcript + ' ';
         else inter += e.results[i][0].transcript;
       }
-      if (fin) { manualQRef.current += fin; setManualQText(manualQRef.current); }
+      if (fin) { manualQRef.current += fin; setManualQText(manualQRef.current.trim()); }
       setLiveWords(inter);
     };
     rec.onerror = function(e) { if (e.error !== 'no-speech' && e.error !== 'aborted') setStatusMsg('Mic: ' + e.error); };
-    rec.onend = function() { if (recRef.current && mqPhaseRef.current === 'recording_q') { try { rec.start(); } catch(ex) {} } };
-    rec.start(); recRef.current = rec;
+    rec.onend = function() {
+      if (adminSRRef.current && mqPhaseRef.current === 'recording_q') {
+        try { rec.start(); } catch(ex) {}
+      }
+    };
+    rec.start();
+    adminSRRef.current = rec;
   }
 
   var mqPhaseRef = useRef('idle');
   useEffect(function() { mqPhaseRef.current = mqPhase; }, [mqPhase]);
 
   function stopRecordAdminQ() {
-    stopSTT(); setLiveWords('');
+    // Stop ONLY the admin SR — do NOT touch Whisper
+    mqPhaseRef.current = 'recorded';
+    if (adminSRRef.current) {
+      try { adminSRRef.current.stop(); } catch(e) {}
+      adminSRRef.current = null;
+    }
+    setLiveWords('');
     setMQPhase('recorded');
   }
 
   function startListenStudentForManualQ() {
-    if (!manualQRef.current.trim() && !manualQText.trim()) { setStatusMsg('Record your question first'); return; }
-    setMQPhase('listening');
     var questionToSpeak = manualQRef.current.trim() || manualQText.trim();
-    // Send question to student via socket — student's browser reads it aloud and captures answer
-    speakAndListen(questionToSpeak);
+    if (!questionToSpeak) { setStatusMsg('Record or type your question first'); return; }
+    // Stop admin SR fully
+    if (adminSRRef.current) {
+      try { adminSRRef.current.stop(); } catch(e) {}
+      adminSRRef.current = null;
+    }
+    stopSTT();
+    setMQPhase('listening');
+    // noTTS=true: student already heard admin's voice live through Jitsi
+    // just show the question text on student screen and start Whisper immediately
+    speakAndListen(questionToSpeak, true);
   }
 
   // ====================================================
@@ -1458,38 +1512,76 @@ export default function VivaRoom() {
           {/* ── Manual Question Mode card ── */}
           {manualQMode && (flow === 'idle' || flow === 'waiting') && (
             <div className="card" style={{ borderLeft: '3px solid #f59e0b' }}>
-              <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#fbbf24', letterSpacing: 1, marginBottom: 10, fontFamily: 'JetBrains Mono,monospace' }}>🎙 TEACHER SPEAKS THE QUESTION</div>
+              <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#fbbf24', letterSpacing: 1, marginBottom: 10, fontFamily: 'JetBrains Mono,monospace' }}>🎙 MANUAL QUESTION MODE</div>
 
-              {/* Step 1: Record teacher's question */}
+              {/* Step 1 */}
               <div style={{ marginBottom: 12 }}>
-                <div style={{ fontSize: '0.74rem', color: '#9ca3af', marginBottom: 6 }}>Step 1 — Speak your question (or type it below)</div>
-                <div style={{ minHeight: 52, padding: '9px 12px', background: 'rgba(245,158,11,.07)', border: '1.5px solid ' + (mqPhase === 'recording_q' ? '#f59e0b' : 'rgba(245,158,11,.2)'), borderRadius: 8, fontSize: '0.9rem', color: '#e5e5e5', lineHeight: 1.6, marginBottom: 6, wordBreak: 'break-word' }}>
-                  {manualQText
-                    ? <span>{manualQText}{mqPhase === 'recording_q' && liveWords && <span style={{ color: '#9ca3af', fontStyle: 'italic' }}> {liveWords}</span>}</span>
-                    : <span style={{ color: '#4b5563', fontStyle: 'italic' }}>{mqPhase === 'recording_q' ? '🎤 Listening for your question…' : 'Your question will appear here'}</span>}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                  <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#fbbf24' }}>Step 1</span>
+                  <span style={{ fontSize: '0.72rem', color: '#9ca3af' }}>
+                    {mqPhase === 'recording_q'
+                      ? '— 🔴 Speaking live via Jitsi (student hears you now)'
+                      : '— Speak your question. Student hears you live through Jitsi.'}
+                  </span>
                 </div>
+
+                {/* Live transcript of admin's spoken question */}
+                <div style={{ minHeight: 52, padding: '9px 12px', background: 'rgba(245,158,11,.07)', border: '1.5px solid ' + (mqPhase === 'recording_q' ? '#f59e0b' : 'rgba(245,158,11,.2)'), borderRadius: 8, fontSize: '0.9rem', color: '#e5e5e5', lineHeight: 1.6, marginBottom: 6, wordBreak: 'break-word', transition: 'border-color .2s' }}>
+                  {mqPhase === 'recording_q' && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                      <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#ef4444', display: 'inline-block', animation: 'pulse 1s infinite' }}/>
+                      <span style={{ fontSize: '0.65rem', color: '#ef4444', fontWeight: 700 }}>LIVE — student can hear your voice through Jitsi</span>
+                    </div>
+                  )}
+                  {manualQText
+                    ? <span>{manualQText}{liveWords && <span style={{ color: '#9ca3af', fontStyle: 'italic' }}> {liveWords}</span>}</span>
+                    : <span style={{ color: '#4b5563', fontStyle: 'italic' }}>
+                        {mqPhase === 'recording_q' ? 'AI is transcribing your question…' : 'Your question transcript appears here'}
+                      </span>}
+                </div>
+
                 <input className="form-input" value={manualQText} onChange={function(e) { setManualQText(e.target.value); manualQRef.current = e.target.value; }}
                   placeholder="Or type your question here…" style={{ marginBottom: 6, background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.1)', color: '#e5e5e5' }}/>
+
                 <div style={{ display: 'flex', gap: 6 }}>
                   {mqPhase !== 'recording_q'
-                    ? <button className="btn btn-warning btn-sm" onClick={startRecordAdminQ} style={{ flex: 1 }}>🎤 Record My Question</button>
-                    : <button className="btn btn-danger btn-sm" onClick={stopRecordAdminQ} style={{ flex: 1 }}>⏹ Done Speaking</button>}
+                    ? <button className="btn btn-warning btn-sm" onClick={startRecordAdminQ} style={{ flex: 1 }}>🎤 Start Speaking Question</button>
+                    : <button className="btn btn-danger btn-sm" onClick={stopRecordAdminQ} style={{ flex: 1 }}>⏹ Done — Question Asked</button>}
                   {(mqPhase === 'recorded' || manualQText.trim()) && (
                     <button className="btn btn-success btn-sm" onClick={startListenStudentForManualQ} style={{ flex: 1 }}>
-                      🔊 Ask Student
+                      🎤 Now Record Student Answer
                     </button>
                   )}
                 </div>
+                {mqPhase === 'recorded' && manualQText.trim() && (
+                  <div style={{ marginTop: 6, fontSize: '0.72rem', color: '#9ca3af', padding: '5px 8px', background: 'rgba(255,255,255,.04)', borderRadius: 6 }}>
+                    ✅ Question sent. Click <strong style={{ color: '#4ade80' }}>Now Record Student Answer</strong> when student is ready to reply.
+                  </div>
+                )}
               </div>
 
-              {/* Step 2: shows automatically after speakAndListen starts */}
-              {(mqPhase === 'listening' || flow === 'listening' || flow === 'grading') && (
+              {/* Step 2: shows automatically after question sent to student */}
+              {(mqPhase === 'listening' || flow === 'speaking' || flow === 'listening' || flow === 'grading') && (
                 <div>
-                  <div style={{ fontSize: '0.74rem', color: '#9ca3af', marginBottom: 6 }}>Step 2 — Student answers (captured automatically)</div>
-                  <div style={{ minHeight: 52, padding: '9px 12px', background: 'rgba(255,255,255,.04)', border: '1.5px solid ' + (flow === 'listening' ? '#ef4444' : 'rgba(255,255,255,.08)'), borderRadius: 8, fontSize: '0.9rem', color: '#e5e5e5', lineHeight: 1.6, wordBreak: 'break-word' }}>
+                  <div style={{ fontSize: '0.74rem', color: '#9ca3af', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    {flow === 'speaking'
+                      ? <><span style={{ width:7,height:7,borderRadius:'50%',background:'#7c3aed',display:'inline-block',animation:'pulse 1s infinite' }}/> Student is hearing the question via TTS…</>
+                      : flow === 'listening'
+                      ? <><span style={{ width:7,height:7,borderRadius:'50%',background:'#ef4444',display:'inline-block',animation:'pulse 1s infinite' }}/> Recording student answer via Whisper…</>
+                      : flow === 'grading'
+                      ? <>⚡ Grading student answer…</>
+                      : <>Step 2 — Student answer (captured automatically)</>
+                    }
+                  </div>
+                  <div style={{ minHeight: 52, padding: '9px 12px', background: 'rgba(255,255,255,.04)', border: '1.5px solid ' + (flow === 'listening' ? '#ef4444' : flow === 'speaking' ? '#7c3aed' : 'rgba(255,255,255,.08)'), borderRadius: 8, fontSize: '0.9rem', color: '#e5e5e5', lineHeight: 1.6, wordBreak: 'break-word', transition: 'border-color .2s' }}>
                     {capturedText
                       ? <span>{capturedText}{liveWords && <span style={{ color: '#9ca3af', fontStyle: 'italic' }}> {liveWords}</span>}</span>
-                      : <span style={{ color: '#374151', fontStyle: 'italic' }}>{flow === 'listening' ? '🎤 Listening for student…' : flow === 'grading' ? '⚡ Grading…' : 'Waiting…'}</span>}
+                      : <span style={{ color: '#374151', fontStyle: 'italic' }}>
+                          {flow === 'speaking' ? '🔊 Wait — student is listening to the question…'
+                           : flow === 'listening' ? '🎤 Student speak now — capturing via Whisper…'
+                           : flow === 'grading'  ? '⚡ Grading…'
+                           : 'Waiting for student response…'}
+                        </span>}
                   </div>
                 </div>
               )}

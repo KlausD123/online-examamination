@@ -50,15 +50,34 @@ export default function VivaJoin() {
 
     // Admin sends question → TTS reads it aloud on student's device only
     sock.on('question-text', function(data) {
-      var text = data.text;
+      var text   = data.text;
+      var noTTS  = data.noTTS; // true = manual mode, admin spoke live via Jitsi
+
       setCurrentQ(text);
       setQFlash(true);
       setTimeout(function() { setQFlash(false); }, 600);
-      if (synthRef.current) {
+
+      if (noTTS) {
+        // Manual mode: student already heard admin's voice through the Jitsi call.
+        // Just display the question text — no TTS, no signal needed.
+        // Admin already started Whisper on their side.
+        return;
+      }
+
+      // Generated mode: read question aloud via TTS, then tell admin we're done
+      function signalTTSDone() {
+        if (sock.connected) sock.emit('tts-done', { vivaId: vid });
+      }
+
+      if (synthRef.current && window.speechSynthesis) {
         synthRef.current.cancel();
         var utt = new SpeechSynthesisUtterance(text);
         utt.rate = 0.9; utt.lang = 'en-US';
+        utt.onend  = function() { signalTTSDone(); };
+        utt.onerror= function() { signalTTSDone(); };
         synthRef.current.speak(utt);
+      } else {
+        signalTTSDone();
       }
     });
   }

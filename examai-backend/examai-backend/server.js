@@ -178,6 +178,11 @@ io.on('connection', (socket) => {
     socket.to(data.vivaId).emit('question-text', { text: data.text });
   });
 
+  // Student TTS finished reading the question → relay to admin so it starts STT
+  socket.on('tts-done', (data) => {
+    socket.to(data.vivaId).emit('tts-done', {});
+  });
+
   // Student sends live answer words → relay to admin for display
   socket.on('student-answer-live', (data) => {
     socket.to(data.vivaId).emit('student-answer-live', { text: data.text, interim: data.interim || '' });

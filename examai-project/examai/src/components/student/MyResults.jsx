@@ -55,10 +55,38 @@ export default function MyResults({ navigate }) {
           <button className="btn btn-ghost btn-sm" onClick={function() { setViewViva(null); }}>← Back</button>
           <div className="page-title" style={{ marginBottom: 4 }}>🎙 Oral Viva — {vr.title}</div>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 20 }}>
-          <div className="stat-card"><div className="stat-value" style={{ color: gc0 }}>{vr.grade || '-'}</div><div className="stat-label">Grade</div></div>
-          <div className="stat-card"><div className="stat-value">{vr.total_score || 0}%</div><div className="stat-label">Score</div></div>
-          <div className="stat-card"><div className="stat-value">{vr.correct_count || 0}/{vr.total_questions || 0}</div><div className="stat-label">Correct</div></div>
+        {/* Score hero */}
+        <div style={{ padding: '20px 24px', background: 'linear-gradient(135deg, rgba(124,58,237,.12), rgba(124,58,237,.04))', border: '1.5px solid rgba(124,58,237,.25)', borderRadius: 14, marginBottom: 20 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 24, flexWrap: 'wrap' }}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontWeight: 900, fontSize: '3rem', color: gc0, lineHeight: 1 }}>{vr.grade || '-'}</div>
+              <div style={{ fontSize: '0.72rem', color: 'var(--text3)', fontWeight: 600 }}>GRADE</div>
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, marginBottom: 8 }}>
+                <span style={{ fontWeight: 900, fontSize: '2.5rem', color: gc0 }}>{vr.total_score || 0}</span>
+                <span style={{ fontWeight: 700, fontSize: '1.2rem', color: 'var(--text3)' }}>/100</span>
+              </div>
+              <div style={{ height: 10, background: 'var(--surface3)', borderRadius: 5, overflow: 'hidden', maxWidth: 260 }}>
+                <div style={{ height: '100%', width: (vr.total_score || 0) + '%', background: gc0, borderRadius: 5 }}/>
+              </div>
+            </div>
+          </div>
+          {/* Correct / Wrong row */}
+          <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+            <div style={{ flex: 1, padding: '10px', background: 'rgba(22,163,74,.1)', border: '1px solid rgba(22,163,74,.25)', borderRadius: 8, textAlign: 'center' }}>
+              <div style={{ fontWeight: 800, fontSize: '1.5rem', color: '#16a34a' }}>{vr.correct_count || 0}</div>
+              <div style={{ fontSize: '0.68rem', color: '#16a34a', fontWeight: 700 }}>✅ CORRECT</div>
+            </div>
+            <div style={{ flex: 1, padding: '10px', background: 'rgba(220,38,38,.1)', border: '1px solid rgba(220,38,38,.25)', borderRadius: 8, textAlign: 'center' }}>
+              <div style={{ fontWeight: 800, fontSize: '1.5rem', color: '#dc2626' }}>{(vr.total_questions || 0) - (vr.correct_count || 0)}</div>
+              <div style={{ fontSize: '0.68rem', color: '#dc2626', fontWeight: 700 }}>❌ WRONG</div>
+            </div>
+            <div style={{ flex: 1, padding: '10px', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, textAlign: 'center' }}>
+              <div style={{ fontWeight: 800, fontSize: '1.5rem', color: 'var(--text)' }}>{vr.total_questions || 0}</div>
+              <div style={{ fontSize: '0.68rem', color: 'var(--text3)', fontWeight: 700 }}>📋 TOTAL</div>
+            </div>
+          </div>
         </div>
         {rep.overall_feedback && (
           <div className="card" style={{ marginBottom: 16, background: 'var(--accent-glow)', border: '1px solid var(--accent-border)' }}>
@@ -149,21 +177,51 @@ export default function MyResults({ navigate }) {
             ? <div className="empty-state"><div className="empty-state-icon">🎙</div><div className="empty-state-title">No viva results yet</div></div>
             : vivaResults.map(function(vr, i) {
                 var gc = gradeColor(vr.grade);
+                var correct = vr.correct_count || 0;
+                var total   = vr.total_questions || 0;
+                var wrong   = total - correct;
+                var score   = vr.total_score || 0;
                 return (
-                  <div key={vr.viva_id || i} className="card" style={{ marginBottom: 12, cursor: 'pointer' }} onClick={function() { setViewViva(vr); }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div key={vr.result_id || i} className="card" style={{ marginBottom: 14, cursor: 'pointer', borderLeft: '4px solid ' + gc }} onClick={function() { setViewViva(vr); }}>
+                    {/* Title + date row */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
                       <div>
-                        <div style={{ fontWeight: 700, marginBottom: 4 }}>{vr.title || 'Viva Session'}</div>
-                        <div style={{ fontSize: '0.8rem', color: 'var(--text3)' }}>
-                          {vr.correct_count || 0}/{vr.total_questions || 0} correct
-                          {vr.created_at && <span style={{ marginLeft: 8 }}>{new Date(vr.created_at).toLocaleDateString()}</span>}
-                        </div>
+                        <div style={{ fontWeight: 700, fontSize: '1rem', marginBottom: 3 }}>{vr.title || 'Viva Session'}</div>
+                        {vr.topic && <div style={{ fontSize: '0.78rem', color: 'var(--text3)' }}>📚 {vr.topic}</div>}
+                        {vr.created_at && <div style={{ fontSize: '0.75rem', color: 'var(--text3)', marginTop: 2 }}>{new Date(vr.created_at).toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' })}</div>}
                       </div>
-                      <div style={{ textAlign: 'center' }}>
-                        <div style={{ fontWeight: 800, fontSize: '1.5rem', color: gc }}>{vr.grade || '-'}</div>
-                        <div style={{ fontFamily: 'JetBrains Mono,monospace', fontSize: '0.85rem', fontWeight: 700 }}>{vr.total_score || 0}%</div>
+                      <div style={{ textAlign: 'center', minWidth: 64 }}>
+                        <div style={{ fontWeight: 900, fontSize: '2rem', color: gc, lineHeight: 1 }}>{vr.grade || '-'}</div>
+                        <div style={{ fontFamily: 'JetBrains Mono,monospace', fontSize: '0.9rem', fontWeight: 700, color: gc }}>{score}%</div>
                       </div>
                     </div>
+
+                    {/* Score bar */}
+                    <div style={{ height: 7, background: 'var(--surface3)', borderRadius: 4, overflow: 'hidden', marginBottom: 10 }}>
+                      <div style={{ height: '100%', width: score + '%', background: gc, borderRadius: 4, transition: 'width 0.5s ease' }}/>
+                    </div>
+
+                    {/* Correct / Wrong / Total stats */}
+                    <div style={{ display: 'flex', gap: 10 }}>
+                      <div style={{ flex: 1, padding: '8px 10px', background: 'rgba(22,163,74,.08)', border: '1px solid rgba(22,163,74,.2)', borderRadius: 8, textAlign: 'center' }}>
+                        <div style={{ fontWeight: 800, fontSize: '1.3rem', color: '#16a34a' }}>{correct}</div>
+                        <div style={{ fontSize: '0.68rem', color: '#16a34a', fontWeight: 600 }}>CORRECT</div>
+                      </div>
+                      <div style={{ flex: 1, padding: '8px 10px', background: 'rgba(220,38,38,.08)', border: '1px solid rgba(220,38,38,.2)', borderRadius: 8, textAlign: 'center' }}>
+                        <div style={{ fontWeight: 800, fontSize: '1.3rem', color: '#dc2626' }}>{wrong}</div>
+                        <div style={{ fontSize: '0.68rem', color: '#dc2626', fontWeight: 600 }}>WRONG</div>
+                      </div>
+                      <div style={{ flex: 1, padding: '8px 10px', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, textAlign: 'center' }}>
+                        <div style={{ fontWeight: 800, fontSize: '1.3rem', color: 'var(--text)' }}>{total}</div>
+                        <div style={{ fontSize: '0.68rem', color: 'var(--text3)', fontWeight: 600 }}>TOTAL</div>
+                      </div>
+                      <div style={{ flex: 1, padding: '8px 10px', background: 'var(--accent-glow)', border: '1px solid var(--accent-border)', borderRadius: 8, textAlign: 'center' }}>
+                        <div style={{ fontWeight: 800, fontSize: '1.3rem', color: 'var(--accent)' }}>{score}<span style={{ fontSize: '0.8rem' }}>/100</span></div>
+                        <div style={{ fontSize: '0.68rem', color: 'var(--accent)', fontWeight: 600 }}>SCORE</div>
+                      </div>
+                    </div>
+
+                    <div style={{ marginTop: 8, fontSize: '0.72rem', color: 'var(--text3)', textAlign: 'right' }}>Tap to view full breakdown →</div>
                   </div>
                 );
               })
