@@ -322,7 +322,17 @@ export default function VivaPractice() {
       prev.unshift(record);
       localStorage.setItem('practice_results', JSON.stringify(prev.slice(0, 50)));
     } catch(e) {
-      setResults({ grade: grade, avgPct: avgPct, correct: correct, total: total, analysis: null, transcript: finalTranscript || transcript });
+      // Build basic analysis from transcript data even if AI fails
+      var wrongAnswers = (finalTranscript || transcript).filter(function(e){ return e.verdict && !e.verdict.correct; }).map(function(e){ return e.question; });
+      var rightAnswers = (finalTranscript || transcript).filter(function(e){ return e.verdict && e.verdict.correct; }).map(function(e){ return e.question; });
+      var fallbackAnalysis = {
+        overall_feedback: 'Session completed with ' + correct + ' correct out of ' + total + ' questions (' + avgPct + '%). Review the questions marked incorrect below.',
+        strong_topics: rightAnswers.slice(0,3).map(function(q){ return q.slice(0,50); }),
+        weak_topics: wrongAnswers.slice(0,3).map(function(q){ return q.slice(0,50); }),
+        improvement_tips: wrongAnswers.length > 0 ? ['Review the topics you answered incorrectly', 'Practice more questions on weak areas', 'Focus on clear explanation of concepts'] : ['Good performance! Keep practicing to maintain', 'Try harder difficulty questions', 'Explore advanced topics'],
+        predicted_exam_readiness: avgPct >= 70 ? 'Almost Ready' : avgPct >= 50 ? 'Almost Ready' : 'Not Ready'
+      };
+      setResults({ grade: grade, avgPct: avgPct, correct: correct, total: total, analysis: fallbackAnalysis, transcript: finalTranscript || transcript });
     }
     setAnalyzing(false);
   }
@@ -614,20 +624,20 @@ export default function VivaPractice() {
               {(analysis.strong_topics || []).length === 0
                 ? <div style={{ color: 'var(--text3)', fontSize: '0.82rem' }}>Keep practicing to build strengths</div>
                 : (analysis.strong_topics || []).map(function(t, i) { return (
-                  <div key={i} style={{ display:'flex', alignItems:'flex-start', gap:6, marginBottom:6 }}>
+                  <div key={i} style={{ display:'flex', alignItems:'flex-start', gap:6, marginBottom:6, padding:'6px 8px', background:'rgba(22,163,74,.05)', borderRadius:6 }}>
                     <span style={{ color:'#16a34a', fontSize:'0.8rem', marginTop:2, flexShrink:0 }}>✅</span>
-                    <span style={{ fontSize: '0.85rem', color: 'var(--text2)' }}>{t}</span>
+                    <span style={{ fontSize: '0.85rem', color: 'var(--text)' }}>{t}</span>
                   </div>); })
               }
             </div>
             <div style={{ background: 'rgba(220,38,38,.06)', borderRadius: 10, padding: '12px 14px', border: '1px solid rgba(220,38,38,.2)' }}>
               <div style={{ fontWeight: 700, color: '#dc2626', marginBottom: 10, fontSize: '0.85rem' }}>📌 Needs Work</div>
               {(analysis.weak_topics || []).length === 0
-                ? <div style={{ color: 'var(--text3)', fontSize: '0.82rem' }}>Great job — no major gaps!</div>
+                ? <div style={{ color: 'var(--text3)', fontSize: '0.82rem' }}>No major gaps detected — great job!</div>
                 : (analysis.weak_topics || []).map(function(t, i) { return (
-                  <div key={i} style={{ display:'flex', alignItems:'flex-start', gap:6, marginBottom:6 }}>
+                  <div key={i} style={{ display:'flex', alignItems:'flex-start', gap:6, marginBottom:6, padding:'6px 8px', background:'rgba(220,38,38,.05)', borderRadius:6 }}>
                     <span style={{ color:'#dc2626', fontSize:'0.8rem', marginTop:2, flexShrink:0 }}>⚠️</span>
-                    <span style={{ fontSize: '0.85rem', color: 'var(--text2)' }}>{t}</span>
+                    <span style={{ fontSize: '0.85rem', color: 'var(--text)' }}>{t}</span>
                   </div>); })
               }
             </div>
