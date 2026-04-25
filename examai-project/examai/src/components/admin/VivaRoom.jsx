@@ -99,6 +99,7 @@ export default function VivaRoom() {
     setTitle(s.title || '');
     setTopic(s.topic || '');
     if (s.questions)   { setQuestions(s.questions);   questionsRef.current = s.questions; }
+    connectAdminSocket(s.viva_id);
     if (s.transcript)  { setTranscript(s.transcript); }
     if (s.currentQ != null) { setCurrentQ(s.currentQ); currentQRef.current = s.currentQ; askedQIdxRef.current = s.currentQ; }
     if (s.selStudentId) setSelStudentId(s.selStudentId);
@@ -431,6 +432,25 @@ export default function VivaRoom() {
         setAlerts(function(a) { return [{ title: '🔴 ' + (data.userName||'Student') + ' left the room', type: 'urgent', time: new Date().toLocaleTimeString() }].concat(a).slice(0,20); });
       }
     });
+
+    // ── Student answer relay ─────────────────────────────────────────────
+    // Live words streaming from student's mic
+    sock.on('student-answer-live', function(data) {
+      capturedRef.current = data.text || '';
+      setCapturedText(data.text || '');
+      if (data.interim) setLiveWords(data.interim);
+    });
+
+    // Final answer from student (after silence or Done button)
+    sock.on('student-answer-final', function(data) {
+      capturedRef.current = data.text || '';
+      setCapturedText(data.text || '');
+      setLiveWords('');
+      // Auto-grade if we're in listening state
+      if (flowRef.current === 'listening' && data.text && data.text.trim().length > 0) {
+        setTimeout(function() { doGradeAndWait(data.text); }, 300);
+      }
+    });
   }
 
   function doMakeOffer(sock, vivaId, stream) {
@@ -530,81 +550,81 @@ export default function VivaRoom() {
 
 
   // ====================================================
+  // ── Connect admin socket — listens for student answers ──────────
+  function connectAdminSocket(vivaId) {
+    if (socketRef.current) { try { socketRef.current.disconnect(); } catch(e) {} socketRef.current = null; }
+    var sock = ioClient(SOCKET_URL);
+    socketRef.current = sock;
+
+    sock.on('connect', function() {
+      console.log('[Admin] socket connected:', sock.id, 'room:', vivaId);
+      sock.emit('join-viva-room', { vivaId: vivaId, role: 'admin', userName: store.currentUser ? (store.currentUser.name || 'Examiner') : 'Examiner' });
+    });
+
+    sock.on('peer-joined', function(data) {
+      if (data.role === 'student') {
+        setStudentConnected(true);
+        store.addToast((data.userName || 'Student') + ' joined the room', 'success');
+        setAlerts(function(a) { return [{ title: '🟢 ' + (data.userName || 'Student') + ' joined', type: 'success', time: new Date().toLocaleTimeString() }].concat(a).slice(0, 20); });
+        window.dispatchEvent(new CustomEvent('viva-peer-joined', { detail: data }));
+      }
+    });
+
+    sock.on('peer-left', function(data) {
+      if (data.role === 'student') {
+        setStudentConnected(false);
+        setAlerts(function(a) { return [{ title: '🔴 ' + (data.userName || 'Student') + ' left', type: 'urgent', time: new Date().toLocaleTimeString() }].concat(a).slice(0, 20); });
+        window.dispatchEvent(new CustomEvent('viva-peer-left', { detail: data }));
+      }
+    });
+
+    // Student sends live words as they speak → show in admin capture box
+    sock.on('student-answer-live', function(data) {
+      if (flowRef.current !== 'listening') return;
+      capturedRef.current = data.text || '';
+      setCapturedText(data.text || '');
+      setLiveWords(data.interim || '');
+      clearTimeout(silenceTimer.current);
+    });
+
+    // Student finalized answer → auto-grade
+    sock.on('student-answer-final', function(data) {
+      if (flowRef.current !== 'listening') return;
+      capturedRef.current = data.text || '';
+      setCapturedText(data.text || '');
+      setLiveWords('');
+      clearTimeout(silenceTimer.current);
+      if (data.text && data.text.trim()) {
+        setTimeout(doGradeAndWait, 300);
+      }
+    });
+
+    sock.on('connect_error', function(e) { console.error('[Admin] socket error:', e.message); });
+  }
+
+  // ── Send question to student — NO local TTS, NO local mic ────────
   function speakAndListen(text) {
-    // Send question to student so they can read it on their screen
     var vivaId = savedVivaRef.current ? savedVivaRef.current.viva_id : null;
+    // Emit question to student's browser — student's TTS reads it, student's mic captures answer
     if (socketRef.current && socketRef.current.connected && vivaId) {
       socketRef.current.emit('question-text', { vivaId: vivaId, text: text });
+    } else {
+      store.addToast('Socket not connected — student may not receive question', 'warning');
     }
-
-    if (!window.speechSynthesis || !text) {
+    // Switch to listening state — student answers will arrive via socket
+    capturedRef.current = ''; setCapturedText(''); setLiveWords('');
+    setFlow('speaking'); flowRef.current = 'speaking'; setStatusMsg('Sending to student…');
+    // After brief delay switch to listening (waiting for student response)
+    setTimeout(function() {
       setFlow('listening'); flowRef.current = 'listening';
-      capturedRef.current = ''; setCapturedText(''); setLiveWords('');
-      startSTT(); return;
-    }
-    synthRef.current.cancel();
-    setFlow('speaking'); flowRef.current = 'speaking'; setStatusMsg('');
-    var utt = new SpeechSynthesisUtterance(text);
-    utt.rate = 0.88; utt.pitch = 1.0;
-    utt.onend = function() {
-      setTimeout(function() {
-        setFlow('listening'); flowRef.current = 'listening';
-        capturedRef.current = ''; setCapturedText(''); setLiveWords('');
-        startSTT();
-      }, 1000); // Wait 1s after TTS ends before listening
-    };
-    utt.onerror = function() {
-      setTimeout(function() {
-        setFlow('listening'); flowRef.current = 'listening';
-        capturedRef.current = ''; setCapturedText('');
-        startSTT();
-      }, 500);
-    };
-    synthRef.current.speak(utt);
+      setStatusMsg('Waiting for student to answer…');
+    }, 1500);
   }
 
-  // ====================================================
-  function startSTT() {
-    if (!SR) { setStatusMsg('Speech recognition not available — use manual input'); return; }
-    stopSTT();
-    var FINAL_PHRASES = ['final answer', "that's my answer", 'that is my answer', 'my final answer', "i'm done", 'i am done', 'done', 'submit', 'that is all', "that's all"];
-    var rec = new SR();
-    rec.continuous = true; rec.interimResults = true; rec.lang = 'en-US';
-    rec.maxAlternatives = 1;
-    rec.onresult = function(e) {
-      var confirmed = '', interim = '';
-      for (var i = e.resultIndex; i < e.results.length; i++) {
-        if (e.results[i].isFinal) confirmed += e.results[i][0].transcript + ' ';
-        else interim += e.results[i][0].transcript;
-      }
-      if (confirmed) {
-        // Check for "final answer" trigger
-        var lower = confirmed.toLowerCase().trim();
-        var saidFinal = FINAL_PHRASES.some(function(p) { return lower.includes(p); });
-        if (saidFinal) {
-          // Remove trigger phrase from captured text
-          FINAL_PHRASES.forEach(function(p) { capturedRef.current = capturedRef.current.replace(new RegExp(p, 'gi'), '').trim(); });
-          setCapturedText(capturedRef.current);
-          clearTimeout(silenceTimer.current);
-          if (flowRef.current === 'listening') setTimeout(doGradeAndWait, 300);
-          return;
-        }
-        capturedRef.current += confirmed; setCapturedText(capturedRef.current);
-      }
-      setLiveWords(interim);
-      clearTimeout(silenceTimer.current);
-      silenceTimer.current = setTimeout(function() {
-        if (flowRef.current === 'listening' && capturedRef.current.trim().length > 0) doGradeAndWait();
-      }, 4000);
-    };
-    rec.onerror = function(e) { if (e.error !== 'no-speech' && e.error !== 'aborted') setStatusMsg('Mic: ' + e.error); };
-    rec.onend = function() { if (recRef.current && flowRef.current === 'listening') { try { rec.start(); } catch(ex) {} } };
-    rec.start(); recRef.current = rec;
-  }
-
+  // startSTT / stopSTT are kept as no-ops — admin never listens locally
+  function startSTT() {}
   function stopSTT() {
     clearTimeout(silenceTimer.current); setLiveWords('');
-    if (recRef.current) { try { recRef.current.stop(); } catch(e) {} recRef.current = null; }
   }
 
   // ====================================================
@@ -755,11 +775,10 @@ export default function VivaRoom() {
 
   function startListenStudentForManualQ() {
     if (!manualQRef.current.trim() && !manualQText.trim()) { setStatusMsg('Record your question first'); return; }
-    // Read the question back to student via TTS then listen
     setMQPhase('listening');
     var questionToSpeak = manualQRef.current.trim() || manualQText.trim();
+    // Send question to student via socket — student's browser reads it aloud and captures answer
     speakAndListen(questionToSpeak);
-    setFlow('speaking'); flowRef.current = 'speaking';
   }
 
   // ====================================================
@@ -836,6 +855,7 @@ export default function VivaRoom() {
       sessionStorage.setItem(SESSION_KEY, JSON.stringify(vivaData));
       setPhase('room');
       setTimeout(setupWebRTC, 300);
+      connectAdminSocket(r.viva_id);
       startPolling();
     } catch(e) { store.addToast(e.message, 'error'); }
     setLoading(false);
