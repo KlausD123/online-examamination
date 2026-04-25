@@ -1226,13 +1226,7 @@ export default function VivaRoom() {
         </div>
       )}
 
-      {/* Student name input */}
-      <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8, padding:'7px 12px', background:'rgba(255,255,255,.04)', borderRadius:8, flexWrap:'wrap' }}>
-        <span style={{ fontSize:'0.72rem', color:'#9ca3af', fontFamily:'JetBrains Mono,monospace', whiteSpace:'nowrap' }}>👤 STUDENT:</span>
-        <input style={{ flex:1, minWidth:160, padding:'4px 8px', borderRadius:6, border:'1px solid rgba(255,255,255,.15)', background:'rgba(255,255,255,.07)', color:'#e5e5e5', fontSize:'0.82rem' }}
-          value={selStudentName} onChange={function(e){ setSelStudentName(e.target.value); }}
-          placeholder="Type student name…"/>
-      </div>
+
 
       {showInvite && (
         <div className="card" style={{ marginBottom: 10 }}>
