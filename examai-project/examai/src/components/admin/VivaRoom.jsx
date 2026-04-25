@@ -1264,20 +1264,15 @@ export default function VivaRoom() {
         {/* LEFT: Jitsi video + question tools */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, overflow: 'auto' }}>
 
-          {/* Jitsi video — always show in room phase */}
-          <div style={{ borderRadius:8, overflow:'hidden' }}>
-            <div style={{ fontSize:'0.65rem', fontWeight:700, color:'#9ca3af', letterSpacing:1, marginBottom:6, textAlign:'center', fontFamily:'JetBrains Mono,monospace' }}>📹 LIVE VIDEO — {vivaIdState || vivaId}</div>
-            {(vivaIdState || vivaId) ? (
-              <JitsiMeet
-                roomName={vivaIdState || vivaId}
-                displayName="Examiner"
-                height={300}
-              />
-            ) : (
-              <div style={{ height:200, display:'flex', alignItems:'center', justifyContent:'center', color:'#6b7280', fontSize:'0.85rem', background:'rgba(255,255,255,.04)', borderRadius:8 }}>
-                Start a room to see video
-              </div>
-            )}
+          {/* Jitsi video — same as student */}
+          <div className="card" style={{ padding: 10 }}>
+            <div style={{ fontSize:'0.65rem', fontWeight:700, color:'#9ca3af', letterSpacing:1, marginBottom:8, textAlign:'center', fontFamily:'JetBrains Mono,monospace' }}>
+              📹 LIVE SESSION
+            </div>
+            {vivaId
+              ? <JitsiMeet roomName={vivaId} displayName="Examiner" height={260}/>
+              : <div style={{ height:200, display:'flex', alignItems:'center', justifyContent:'center', color:'#6b7280', fontSize:'0.85rem' }}>Video loading…</div>
+            }
           </div>
 
           <div className="card" style={{ padding: 12 }}>
