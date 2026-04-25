@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useStore } from './store/useStore';
 import CoursesPanel from './components/admin/CoursesPanel';
+import CourseAnalytics from './components/admin/CourseAnalytics';
+import CourseProgress from './components/student/CourseProgress';
 import MyCourses from './components/student/MyCourses';
 import AuthPage from './components/AuthPage';
 import AdminDashboard from './components/admin/AdminDashboard';
@@ -24,6 +26,7 @@ var adminNav = [
   { key: 'exams',     label: '📝 Exams' },
   { key: 'create',    label: '+ Create' },
   { key: 'courses',   label: '🏫 Courses' },
+  { key: 'courseanalytics', label: '📊 Course Analytics' },
   { key: 'students',  label: '👥 Students' },
   { key: 'analytics', label: '📈 Analytics' },
   { key: 'announce',  label: '📢 Announce' },
@@ -34,6 +37,7 @@ var studentNav = [
   { key: 'dashboard',      label: '🏠 Dashboard' },
   { key: 'exams',          label: '📝 Take Exam' },
   { key: 'mycourses',      label: '🏫 Courses' },
+  { key: 'courseprogress', label: '📈 Course Progress' },
   { key: 'leaderboard',    label: '🏆 Leaderboard' },
   { key: 'results',        label: '📊 My Results' },
   { key: 'practice',       label: '🎯 Practice' },
@@ -95,6 +99,7 @@ export default function App() {
         case 'announce':  return React.createElement(Notifications,  null);
         case 'viva':      return React.createElement(VivaRoom,       null);
         case 'courses':   return React.createElement(CoursesPanel,   null);
+        case 'courseanalytics': return React.createElement(CourseAnalytics, null);
         case 'profile':   return React.createElement(StudentProfile, null);
         default:          return React.createElement(AdminDashboard, { navigate: navigate });
       }
@@ -109,6 +114,7 @@ export default function App() {
         case 'updates':       return React.createElement(Notifications,    null);
         case 'viva':          return React.createElement(VivaJoin,         null);
         case 'mycourses':     return React.createElement(MyCourses,        null);
+        case 'courseprogress': return React.createElement(CourseProgress, null);
         case 'profile':       return React.createElement(StudentProfile,   null);
         default:              return React.createElement(StudentDashboard, { navigate: navigate });
       }
