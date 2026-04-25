@@ -4,10 +4,17 @@ import { useStore } from '../../store/useStore';
 import YouTubeResources from '../YouTubeResources';
 
 function parseJSON(raw) {
-  try { return JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) {
-    var m = raw.match(/\{[\s\S]*\}/); if (m) try { return JSON.parse(m[0]); } catch(e2) {}
-    return null;
-  }
+  if (!raw) return null;
+  var cleaned = raw.replace(/```json/g,'').replace(/```/g,'').trim();
+  // Try direct parse first
+  try { return JSON.parse(cleaned); } catch(e) {}
+  // Try extracting array
+  var arrMatch = cleaned.match(/\[[\s\S]*\]/);
+  if (arrMatch) { try { return JSON.parse(arrMatch[0]); } catch(e2) {} }
+  // Try extracting object
+  var objMatch = cleaned.match(/\{[\s\S]*\}/);
+  if (objMatch) { try { return JSON.parse(objMatch[0]); } catch(e3) {} }
+  return null;
 }
 
 var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -65,6 +72,30 @@ export default function VivaPractice() {
     setTtsSupport(!!(window.speechSynthesis));
   }, []);
 
+  // Stop all audio/mic when leaving practice phase
+  useEffect(function() {
+    if (phase !== 'practice') {
+      window.speechSynthesis && window.speechSynthesis.cancel();
+      synthRef.current && synthRef.current.cancel();
+      flowActive.current = false;
+      clearTimeout(silenceTimer.current);
+      if (recRef.current) { try { recRef.current.abort(); } catch(e){} recRef.current = null; }
+      recordingRef.current = false;
+      setRecording(false); setSpeaking(false);
+    }
+  }, [phase]); // eslint-disable-line
+
+  // Stop everything on unmount (when navigating to another page)
+  useEffect(function() {
+    return function() {
+      window.speechSynthesis && window.speechSynthesis.cancel();
+      synthRef.current && synthRef.current.cancel();
+      flowActive.current = false;
+      clearTimeout(silenceTimer.current);
+      if (recRef.current) { try { recRef.current.abort(); } catch(e){} recRef.current = null; }
+    };
+  }, []); // eslint-disable-line
+
   // ====================================================
   async function handleStart() {
     if (!topic.trim()) { store.addToast('Enter a topic first', 'error'); return; }
@@ -82,8 +113,18 @@ export default function VivaPractice() {
         ' Mix conceptual, applied, and analytical questions. Seed: ' + vpRnd + '.' +
         ' Return JSON: [{"question":"?","model_answer":"2-4 sentence answer","hint":"1 key point"}]';
       var raw = await groqChat(sys, usr, 2000, 0.7);
+      console.log('[VivaPractice] Raw AI response:', raw ? raw.slice(0,200) : 'EMPTY');
       var qs  = parseJSON(raw);
-      if (!Array.isArray(qs) || qs.length === 0) throw new Error('Could not parse questions');
+      console.log('[VivaPractice] Parsed questions:', qs);
+      if (!Array.isArray(qs) || qs.length === 0) throw new Error('No questions returned. Raw: ' + (raw||'').slice(0,100));
+      // Normalize field names — AI sometimes uses question_text instead of question
+      qs = qs.map(function(q) {
+        return {
+          question: q.question || q.question_text || q.q || 'Question unavailable',
+          model_answer: q.model_answer || q.answer || q.correct_answer || '',
+          hint: q.hint || q.tip || ''
+        };
+      });
       // Save used questions to prevent repeats next time
       try {
         var saveKey = 'dexam_used_q_' + topic.toLowerCase().replace(/[^a-z0-9]/g,'_').slice(0,30) + '_viva';

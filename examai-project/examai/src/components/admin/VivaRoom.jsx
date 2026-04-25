@@ -1145,17 +1145,23 @@ export default function VivaRoom() {
           <button className="btn btn-outline" onClick={function() { setPhase('results'); }}>← Review</button>
           <button className="btn btn-primary" onClick={resetForNextStudent}>👤 Next Student (Keep Room)</button>
           <button className="btn btn-outline" onClick={function(){
-              var vid = savedVivaRef.current && savedVivaRef.current.viva_id;
-              if (!vid) return;
-              var token = localStorage.getItem('examai_token');
-              fetch((process.env.REACT_APP_API_URL||'http://localhost:5000') + '/api/viva/' + vid + '/export-csv', {
-                headers: { 'Authorization': 'Bearer ' + token }
-              }).then(function(r){ return r.blob(); }).then(function(blob){
-                var url = URL.createObjectURL(blob);
-                var a = document.createElement('a');
-                a.href = url; a.download = 'viva_results.csv'; a.click();
-                URL.revokeObjectURL(url);
-              }).catch(function(e){ alert('Export failed: ' + e.message); });
+              // Generate CSV from current results state
+              if (!results) { alert('No results to export yet'); return; }
+              var rows = [['Student','Score (%)','Grade','Correct','Total Qs','Session']];
+              rows.push([
+                results.student_name || (studentRef && studentRef.current && studentRef.current.name) || 'Student',
+                results.total_score || 0,
+                results.grade || 'F',
+                results.correct_count || 0,
+                results.total_questions || 0,
+                title || 'Viva'
+              ]);
+              var csv = rows.map(function(r){ return r.join(','); }).join('\n');
+              var blob = new Blob([csv], { type: 'text/csv' });
+              var url = URL.createObjectURL(blob);
+              var a = document.createElement('a');
+              a.href = url; a.download = (title||'viva').replace(/[^a-z0-9]/gi,'_') + '_result.csv';
+              a.click(); URL.revokeObjectURL(url);
             }}>📥 Export CSV</button>
           <button className="btn btn-outline btn-sm" onClick={function(){
             var vivaId = savedVivaRef.current && savedVivaRef.current.viva_id;
