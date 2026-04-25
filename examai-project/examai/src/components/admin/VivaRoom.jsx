@@ -161,8 +161,10 @@ export default function VivaRoom() {
   var [inviting,   setInviting]    = useState(false);
 
   // Which student is currently being examined
-  var [selStudentId,   setSelStudentId]   = useState(null);
-  var [selStudentName, setSelStudentName] = useState('');
+  var [selStudentId,        setSelStudentId]        = useState(null);
+  var [selStudentName,      setSelStudentName]      = useState('');
+  // Tracks all students graded in this session before ending
+  var [savedStudentResults, setSavedStudentResults] = useState([]);
 
   var [alerts,    setAlerts]    = useState([]);
   var [unread,    setUnread]    = useState(0);
@@ -863,12 +865,25 @@ export default function VivaRoom() {
     if (!lastT) return;
     setFollowUpLoading(true); setFollowUpQ('');
     try {
-      var prompt = 'Original question: ' + lastT.question +
-        '\nStudent answered: ' + (lastT.student_said || 'no answer') +
-        '\nMissing points: ' + (lastT.missing || 'none') +
-        '\n\nGenerate ONE concise follow-up question (max 20 words) to probe deeper or clarify what was missing. Return only the question text, no quotes or punctuation at start/end.';
-      var resp = await groqChat('You are a viva examiner generating one focused follow-up question.', prompt, 80, 0.7);
-      var fq = (resp || '').trim().replace(/^["']+|["']+$/g, '').trim();
+      var wasCorrect  = lastT.correct;
+      var verdict     = lastT.verdict || '';
+      var partCorrect = verdict === 'Partially Correct';
+
+      var instruction = wasCorrect
+        ? 'The student answered CORRECTLY. Generate ONE advanced follow-up question that goes deeper, tests edge cases, or explores a related concept. Make it more challenging.'
+        : partCorrect
+        ? 'The student answered PARTIALLY CORRECTLY. Generate ONE follow-up question that specifically targets the gap: "' + (lastT.missing || 'the missing concept') + '". Help them complete their understanding.'
+        : 'The student answered INCORRECTLY or gave no answer. Generate ONE simpler, more direct follow-up question to check if they understand the basic concept behind: "' + (lastT.question || '') + '". Be encouraging but probing.';
+
+      var prompt = 'Question asked: ' + lastT.question +
+        '\nStudent said: ' + (lastT.student_said || '(no answer)') +
+        '\nVerdict: ' + verdict +
+        '\nMissing: ' + (lastT.missing || 'none') +
+        '\n\n' + instruction +
+        '\n\nReturn ONLY the follow-up question text. No quotes, no numbering, max 25 words.';
+
+      var resp = await groqChat('You are an experienced viva examiner crafting targeted follow-up questions based on student performance.', prompt, 100, 0.7);
+      var fq = (resp || '').trim().replace(/^["'\d\.\)]+|["']+$/g, '').trim();
       setFollowUpQ(fq);
     } catch(e) { setFollowUpQ('Could not generate: ' + e.message); }
     setFollowUpLoading(false);
@@ -1154,6 +1169,15 @@ export default function VivaRoom() {
           }),
         });
       }
+      var savedEntry = {
+        student_id:   selStudentId,
+        student_name: selStudentName || 'Unknown Student',
+        total_score:  ts, grade, correct_count: cc,
+        total_questions: editableAns.length,
+        answers:      editableAns,
+        saved_at:     new Date().toISOString(),
+      };
+      setSavedStudentResults(function(prev) { return prev.concat([savedEntry]); });
       setResults(function(r) { return Object.assign({}, r, { total_score: ts, grade, correct_count: cc }); });
       setPhase('final');
     } catch(e) { store.addToast('Save failed: ' + e.message, 'error'); }
@@ -1167,9 +1191,10 @@ export default function VivaRoom() {
     setCurrentQ(0); currentQRef.current = 0; askedQIdxRef.current = 0;
     setFlow('idle'); flowRef.current = 'idle'; setStatusMsg('');
     setSelStudentId(null); setSelStudentName('');
+    setFollowUpQ('');
     setResults(null); setPhase('room');
     synthRef.current && synthRef.current.cancel();
-    stopSTT();
+    stopSTT(); stopAdminWhisper();
   }
 
   async function loadStudents() { try { setStudents((await apiGet('/students')) || []); } catch(e) {} }
@@ -1408,69 +1433,212 @@ export default function VivaRoom() {
   // ====================================================
   if (phase === 'final' && results) {
     var fg = gcol(results.grade || 'F');
+    var avgScore = savedStudentResults.length > 0
+      ? Math.round(savedStudentResults.reduce(function(a,r){ return a+(r.total_score||0); },0)/savedStudentResults.length)
+      : results.total_score || 0;
     return (
       <div className="fade-up">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
-          <div className="page-title">✅ Result Saved — {selStudentName || 'Student'}</div>
-          <span className="badge badge-success" style={{ marginLeft: 'auto' }}>Finalized</span>
+        <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:20, flexWrap:'wrap' }}>
+          <div className="page-title">✅ {selStudentName || 'Student'} — Saved</div>
+          <span className="badge badge-success">Finalized</span>
+          <span style={{ marginLeft:'auto', fontSize:'0.8rem', color:'var(--text3)' }}>
+            {savedStudentResults.length} student{savedStudentResults.length !== 1 ? 's' : ''} graded this session
+          </span>
         </div>
-        <div className="card" style={{ marginBottom: 20, textAlign: 'center', padding: 36, borderLeft: '4px solid ' + fg }}>
-          <div style={{ fontFamily: 'Space Grotesk,sans-serif', fontWeight: 900, fontSize: '4.5rem', color: fg, lineHeight: 1 }}>{results.total_score || 0}%</div>
-          <div style={{ fontFamily: 'Space Grotesk,sans-serif', fontWeight: 800, fontSize: '2rem', color: fg, marginTop: 6 }}>Grade {results.grade}</div>
-          <div style={{ color: 'var(--text3)', marginTop: 6 }}>{results.correct_count || 0} correct · {editableAns.length} questions · Full transcript saved to student's account</div>
+
+        {/* This student result card */}
+        <div className="card" style={{ marginBottom:16, borderLeft:'4px solid '+fg }}>
+          <div style={{ display:'flex', alignItems:'center', gap:20, flexWrap:'wrap' }}>
+            <div style={{ textAlign:'center' }}>
+              <div style={{ fontFamily:'Space Grotesk,sans-serif', fontWeight:900, fontSize:'3.5rem', color:fg, lineHeight:1 }}>{results.total_score||0}%</div>
+              <div style={{ fontWeight:800, fontSize:'1.5rem', color:fg }}>Grade {results.grade}</div>
+              <div style={{ fontSize:'0.75rem', color:'var(--text3)', marginTop:4 }}>{selStudentName}</div>
+            </div>
+            <div style={{ display:'flex', gap:10 }}>
+              <div style={{ padding:'10px 14px', background:'rgba(22,163,74,.1)', border:'1px solid rgba(22,163,74,.2)', borderRadius:8, textAlign:'center' }}>
+                <div style={{ fontWeight:800, fontSize:'1.4rem', color:'#16a34a' }}>{results.correct_count||0}</div>
+                <div style={{ fontSize:'0.65rem', color:'#16a34a', fontWeight:700 }}>✅ CORRECT</div>
+              </div>
+              <div style={{ padding:'10px 14px', background:'rgba(220,38,38,.1)', border:'1px solid rgba(220,38,38,.2)', borderRadius:8, textAlign:'center' }}>
+                <div style={{ fontWeight:800, fontSize:'1.4rem', color:'#dc2626' }}>{(editableAns.length)-(results.correct_count||0)}</div>
+                <div style={{ fontSize:'0.65rem', color:'#dc2626', fontWeight:700 }}>❌ WRONG</div>
+              </div>
+              <div style={{ padding:'10px 14px', background:'var(--surface2)', border:'1px solid var(--border)', borderRadius:8, textAlign:'center' }}>
+                <div style={{ fontWeight:800, fontSize:'1.4rem' }}>{editableAns.length}</div>
+                <div style={{ fontSize:'0.65rem', color:'var(--text3)', fontWeight:700 }}>TOTAL Q</div>
+              </div>
+            </div>
+          </div>
         </div>
-        <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
-          <button className="btn btn-outline" onClick={function() { setPhase('results'); }}>← Review</button>
-          <button className="btn btn-outline" onClick={async function(){
-              var vid = savedVivaRef.current && savedVivaRef.current.viva_id;
-              if (!vid) { alert('No viva session'); return; }
-              try {
-                var { apiGet } = require('../../utils/api');
-                var data = await apiGet('/viva/' + vid + '/results-csv-data');
-                var rows = ['Student,Email,Score (%),Grade,Correct,Total Questions,Session,Date'];
-                (data||[]).forEach(function(r){
-                  rows.push([r.student_name||'Unknown', r.student_email||'', r.total_score||0, r.grade||'F', r.correct_count||0, r.total_questions||0, (r.title||'').replace(/,/g,' '), new Date(r.created_at).toLocaleDateString()].join(','));
-                });
-                // Also add transcript
-                if (transcript && transcript.length > 0) {
-                  rows.push(''); rows.push('Q,Question,Answer,Verdict,Score%');
-                  transcript.forEach(function(t,i){
-                    rows.push([i+1, '"'+(t.question||'').replace(/"/g,"'")+'"', '"'+(t.student_said||'').replace(/"/g,"'")+'"', t.verdict?t.verdict.verdict:'', t.verdict?t.verdict.score_pct:0].join(','));
-                  });
-                }
-                var blob = new Blob([rows.join('\n')], { type: 'text/csv' });
-                var url = URL.createObjectURL(blob);
-                var a = document.createElement('a');
-                a.href = url; a.download = (title||'viva').replace(/[^a-z0-9]/gi,'_')+'_results.csv';
-                document.body.appendChild(a); a.click(); document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-              } catch(e) {
-                // Fallback to transcript only
-                var rows2 = ['Q,Question,Answer,Verdict,Score%'];
-                (transcript||[]).forEach(function(t,i){ rows2.push([i+1,'"'+(t.question||'')+'"','"'+(t.student_said||'')+'"',t.verdict?t.verdict.verdict:'',t.verdict?t.verdict.score_pct:0].join(',')); });
-                var blob2 = new Blob([rows2.join('\n')],{type:'text/csv'});
-                var url2 = URL.createObjectURL(blob2);
-                var a2 = document.createElement('a'); a2.href=url2; a2.download='viva_transcript.csv';
-                document.body.appendChild(a2); a2.click(); document.body.removeChild(a2); URL.revokeObjectURL(url2);
-              }
-            }}>📥 Export CSV</button>
-          <button className="btn btn-outline btn-sm" onClick={function(){
-            var vivaId = savedVivaRef.current && savedVivaRef.current.viva_id;
-            var resultId = results && results.result_id;
-            if (!vivaId || !resultId) return;
-            var nowVisible = results.result_visible === 1;
-            apiPost('/viva/' + vivaId + '/result/' + resultId + '/visibility', { visible: !nowVisible })
-              .then(function(){ store.addToast('Result ' + (!nowVisible ? 'visible' : 'hidden') + ' for student', 'success'); })
-              .catch(function(){});
-          }}>
-            {results && results.result_visible === 1 ? '🙈 Hide from Student' : '👁 Show to Student'}
+
+        {/* All students graded so far */}
+        {savedStudentResults.length > 1 && (
+          <div className="card" style={{ marginBottom:16 }}>
+            <div style={{ fontWeight:700, marginBottom:12, fontSize:'0.9rem' }}>📋 All Students This Session</div>
+            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.85rem' }}>
+              <thead><tr style={{ borderBottom:'2px solid var(--border)' }}>
+                <th style={{ textAlign:'left', padding:'6px 8px', color:'var(--text3)' }}>Student</th>
+                <th style={{ textAlign:'center', padding:'6px 8px', color:'var(--text3)' }}>Score</th>
+                <th style={{ textAlign:'center', padding:'6px 8px', color:'var(--text3)' }}>Grade</th>
+                <th style={{ textAlign:'center', padding:'6px 8px', color:'var(--text3)' }}>✅</th>
+                <th style={{ textAlign:'center', padding:'6px 8px', color:'var(--text3)' }}>❌</th>
+              </tr></thead>
+              <tbody>
+                {savedStudentResults.map(function(r,i){
+                  var sc = gcol(r.grade);
+                  return (
+                    <tr key={i} style={{ borderBottom:'1px solid var(--border)', background:i===savedStudentResults.length-1?'var(--accent-glow)':'transparent' }}>
+                      <td style={{ padding:'8px', fontWeight:600 }}>{r.student_name}</td>
+                      <td style={{ padding:'8px', textAlign:'center', fontWeight:700, color:sc }}>{r.total_score}%</td>
+                      <td style={{ padding:'8px', textAlign:'center', fontWeight:900, color:sc }}>{r.grade}</td>
+                      <td style={{ padding:'8px', textAlign:'center', color:'#16a34a', fontWeight:700 }}>{r.correct_count}</td>
+                      <td style={{ padding:'8px', textAlign:'center', color:'#dc2626', fontWeight:700 }}>{r.total_questions-r.correct_count}</td>
+                    </tr>
+                  );
+                })}
+                <tr style={{ borderTop:'2px solid var(--border)', background:'rgba(124,58,237,.07)' }}>
+                  <td style={{ padding:'8px', fontWeight:700, color:'var(--accent)' }}>Class Average</td>
+                  <td style={{ padding:'8px', textAlign:'center', fontWeight:900, color:'var(--accent)' }}>{avgScore}%</td>
+                  <td colSpan={4}/>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Action buttons */}
+        <div style={{ display:'flex', gap:12, justifyContent:'center', flexWrap:'wrap' }}>
+          <button className="btn btn-outline" onClick={function(){ setPhase('results'); }}>← Review</button>
+          <button className="btn btn-primary" style={{ fontWeight:700 }} onClick={resetForNextStudent}>
+            👤 Next Student
           </button>
-          <button className="btn btn-danger btn-sm" onClick={resetAll}>🔒 End Session</button>
+          <button className="btn btn-success btn-lg" style={{ fontWeight:700 }} onClick={function(){
+            var vid = savedVivaRef.current && savedVivaRef.current.viva_id;
+            if (vid) apiPost('/viva/'+vid+'/end', {}).catch(function(){});
+            setPhase('session-analytics');
+          }}>
+            🏁 End Session &amp; View Analytics
+          </button>
+          <button className="btn btn-danger btn-sm" onClick={resetAll}>🔒 Close</button>
         </div>
       </div>
     );
   }
 
+  // ── SESSION ANALYTICS — full class report ──────────────────────────────
+  if (phase === 'session-analytics') {
+    var allR = savedStudentResults;
+    var classAvg2 = allR.length > 0
+      ? Math.round(allR.reduce(function(a,r){ return a+(r.total_score||0); },0)/allR.length) : 0;
+    var sorted = allR.slice().sort(function(a,b){ return (b.total_score||0)-(a.total_score||0); });
+    var topS  = sorted[0] || null;
+    var weakS = sorted[sorted.length-1] || null;
+    // Question difficulty across all students
+    var qMap = {};
+    allR.forEach(function(r){
+      (r.answers||[]).forEach(function(a){
+        var k = (a.question||'').slice(0,80);
+        if (!qMap[k]) qMap[k] = { q: a.question, correct:0, total:0 };
+        qMap[k].total++;
+        if (a.correct) qMap[k].correct++;
+      });
+    });
+    var qArr2 = Object.values(qMap).sort(function(a,b){ return (a.correct/a.total)-(b.correct/b.total); });
+
+    return (
+      <div className="fade-up">
+        <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:20 }}>
+          <div className="page-title">🏆 Session Analytics</div>
+          <span style={{ fontSize:'0.85rem', color:'var(--text3)' }}>{title} · {topic||''}</span>
+        </div>
+
+        {/* Summary stats */}
+        <div className="stats-grid" style={{ marginBottom:20 }}>
+          <div className="stat-card"><div className="stat-value">{allR.length}</div><div className="stat-label">Students</div></div>
+          <div className="stat-card"><div className="stat-value" style={{ color:'var(--accent)' }}>{classAvg2}%</div><div className="stat-label">Class Average</div></div>
+          {topS && <div className="stat-card"><div className="stat-value" style={{ fontSize:'1rem', color:'#16a34a' }}>{topS.student_name}</div><div className="stat-label">🥇 Top ({topS.total_score}%)</div></div>}
+          {weakS && weakS!==topS && <div className="stat-card"><div className="stat-value" style={{ fontSize:'1rem', color:'#dc2626' }}>{weakS.student_name}</div><div className="stat-label">📌 Needs Help ({weakS.total_score}%)</div></div>}
+        </div>
+
+        {/* Student-wise table */}
+        <div className="card" style={{ marginBottom:20 }}>
+          <div style={{ fontWeight:700, marginBottom:14 }}>👥 Student-Wise Results</div>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.88rem' }}>
+            <thead><tr style={{ borderBottom:'2px solid var(--border)' }}>
+              <th style={{ textAlign:'left', padding:'8px', color:'var(--text3)' }}>Rank</th>
+              <th style={{ textAlign:'left', padding:'8px', color:'var(--text3)' }}>Student</th>
+              <th style={{ textAlign:'center', padding:'8px', color:'var(--text3)' }}>Score</th>
+              <th style={{ textAlign:'center', padding:'8px', color:'var(--text3)' }}>Grade</th>
+              <th style={{ textAlign:'center', padding:'8px', color:'var(--text3)' }}>✅ Right</th>
+              <th style={{ textAlign:'center', padding:'8px', color:'var(--text3)' }}>❌ Wrong</th>
+              <th style={{ textAlign:'left', padding:'8px', color:'var(--text3)' }}>Bar</th>
+            </tr></thead>
+            <tbody>
+              {sorted.map(function(r,i){
+                var sc = gcol(r.grade); var wrong = r.total_questions-r.correct_count;
+                return (
+                  <tr key={i} style={{ borderBottom:'1px solid var(--border)' }}>
+                    <td style={{ padding:'10px 8px', fontWeight:700, color:'var(--text3)' }}>{i===0?'🥇':i===1?'🥈':i===2?'🥉':'#'+(i+1)}</td>
+                    <td style={{ padding:'10px 8px', fontWeight:600 }}>{r.student_name}</td>
+                    <td style={{ padding:'10px 8px', textAlign:'center', fontWeight:800, color:sc, fontFamily:'JetBrains Mono,monospace' }}>{r.total_score}%</td>
+                    <td style={{ padding:'10px 8px', textAlign:'center', fontWeight:900, fontSize:'1.1rem', color:sc }}>{r.grade}</td>
+                    <td style={{ padding:'10px 8px', textAlign:'center', color:'#16a34a', fontWeight:700 }}>{r.correct_count}</td>
+                    <td style={{ padding:'10px 8px', textAlign:'center', color:'#dc2626', fontWeight:700 }}>{wrong}</td>
+                    <td style={{ padding:'10px 8px' }}>
+                      <div style={{ height:8, background:'var(--surface3)', borderRadius:4, overflow:'hidden', maxWidth:120 }}>
+                        <div style={{ height:'100%', width:(r.total_score||0)+'%', background:sc, borderRadius:4 }}/>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+              <tr style={{ borderTop:'2px solid var(--border)', background:'var(--accent-glow)' }}>
+                <td/><td style={{ padding:'10px 8px', fontWeight:700, color:'var(--accent)' }}>Class Average</td>
+                <td style={{ padding:'10px 8px', textAlign:'center', fontWeight:900, color:'var(--accent)' }}>{classAvg2}%</td>
+                <td colSpan={4}/>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        {/* Question difficulty */}
+        {qArr2.length > 0 && (
+          <div className="card" style={{ marginBottom:20 }}>
+            <div style={{ fontWeight:700, marginBottom:14 }}>📊 Question Difficulty (Hardest first)</div>
+            {qArr2.map(function(qs,i){
+              var pct2 = qs.total>0?Math.round((qs.correct/qs.total)*100):0;
+              var col2 = pct2>=70?'#16a34a':pct2>=40?'#d97706':'#dc2626';
+              return (
+                <div key={i} style={{ marginBottom:12, padding:'10px 14px', background:'var(--surface2)', borderRadius:8, borderLeft:'3px solid '+col2 }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
+                    <span style={{ fontSize:'0.85rem', color:'var(--text2)', flex:1, marginRight:12 }}>{qs.q}</span>
+                    <span style={{ fontWeight:700, color:col2, flexShrink:0 }}>{qs.correct}/{qs.total} ({pct2}%)</span>
+                  </div>
+                  <div style={{ height:6, background:'var(--surface3)', borderRadius:3, overflow:'hidden' }}>
+                    <div style={{ height:'100%', width:pct2+'%', background:col2, borderRadius:3 }}/>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div style={{ display:'flex', gap:12, justifyContent:'center', flexWrap:'wrap' }}>
+          <button className="btn btn-outline btn-sm" onClick={function(){
+            var rows=['Rank,Student,Score (%),Grade,Correct,Wrong,Total,Topic,Session'];
+            sorted.forEach(function(r,i){
+              rows.push([i+1,'"'+r.student_name+'"',r.total_score,r.grade,r.correct_count,r.total_questions-r.correct_count,r.total_questions,'"'+(topic||title)+'"','"'+title+'"'].join(','));
+            });
+            var blob=new Blob([rows.join('\n')],{type:'text/csv'});
+            var a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+            a.download=(title||'viva').replace(/[^a-z0-9]/gi,'_')+'_session_analytics.csv';
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+          }}>📥 Export CSV</button>
+          <button className="btn btn-danger" onClick={resetAll}>🔒 Close Session</button>
+        </div>
+      </div>
+    );
+  }
   // ====================================================
   var vivaId = savedVivaRef.current ? savedVivaRef.current.viva_id : '';
   var q = questions[currentQ];
