@@ -33,6 +33,7 @@ export default function JitsiMeet({ roomName, displayName, height, role }) {
 
             // Devices on by default
             startWithAudioMuted:  false,
+            startWithVideoUnmuted: true,
             startWithVideoMuted:  false,
 
             // No watermarks or branding
@@ -60,6 +61,10 @@ export default function JitsiMeet({ roomName, displayName, height, role }) {
             // Audio quality
             enableNoisyMicDetection:       false,
             enableNoAudioDetection:        false,
+
+            // Force tile view — shows all participants including remote video
+            defaultLocalDisplayName:       displayName || 'User',
+            tileView:                      { numberOfVisibleTiles: 2 },
           },
 
           interfaceConfigOverwrite: {

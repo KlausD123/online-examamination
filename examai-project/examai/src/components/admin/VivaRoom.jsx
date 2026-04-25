@@ -1330,14 +1330,10 @@ export default function VivaRoom() {
               </div>
             </div>
             {vivaId
-              ? <JitsiMeet roomName={vivaId} displayName={store.currentUser ? (store.currentUser.name || "Examiner") : "Examiner"} height={280} role="admin"/>
+              ? <JitsiMeet roomName={vivaId} displayName={store.currentUser ? (store.currentUser.name || "Examiner") : "Examiner"} height={340} role="admin"/>
               : <div style={{ height:200, display:'flex', alignItems:'center', justifyContent:'center', color:'#6b7280', fontSize:'0.85rem' }}>Video loading…</div>
             }
-            {!studentConnected && (
-              <div style={{ marginTop:8, padding:'6px 10px', background:'rgba(255,255,255,.04)', borderRadius:6, fontSize:'0.72rem', color:'#6b7280', textAlign:'center' }}>
-                Student will appear here once they join the room
-              </div>
-            )}
+
           </div>
 
           <div className="card" style={{ padding: 12 }}>
@@ -1384,12 +1380,7 @@ export default function VivaRoom() {
         {/* MIDDLE: live oral flow */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, overflow: 'auto' }}>
 
-          {/* No start button needed — examiner clicks Ask directly */}
-          {flow === 'idle' && questions.length > 0 && transcript.length === 0 && (
-            <div style={{ padding: '10px 14px', background: 'rgba(124,58,237,.08)', border: '1px solid rgba(124,58,237,.2)', borderRadius: 8, fontSize: '0.8rem', color: '#a78bfa', textAlign: 'center' }}>
-              👆 Click <strong>Ask</strong> next to any question on the right to begin
-            </div>
-          )}
+
 
           {questions.length === 0 && (
             <div className="card" style={{ textAlign: 'center', padding: 32 }}>
@@ -1407,7 +1398,7 @@ export default function VivaRoom() {
                 style={{ padding: '6px 14px', borderRadius: 7, border: '1.5px solid ' + (manualQMode ? '#f59e0b' : 'rgba(255,255,255,.15)'), background: manualQMode ? 'rgba(245,158,11,.15)' : 'transparent', color: manualQMode ? '#fbbf24' : '#9ca3af', fontSize: '0.78rem', fontWeight: 700, cursor: 'pointer' }}>
                 🎙 Manual Question Mode {manualQMode ? '(ON)' : '(OFF)'}
               </button>
-              <span style={{ fontSize: '0.72rem', color: '#6b7280' }}>Speak your own question — AI grades against student's reply</span>
+
             </div>
           )}
 
