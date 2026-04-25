@@ -1,22 +1,25 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 export default function JitsiMeet({ roomName, displayName, height }) {
   var containerRef = useRef(null);
   var apiRef = useRef(null);
+  var [status, setStatus] = useState('loading');
 
   useEffect(function() {
-    if (!roomName || !containerRef.current) return;
+    if (!roomName) return;
+    var cleanRoom = 'DExamViva' + String(roomName).replace(/[^a-zA-Z0-9]/g, '').slice(0, 20);
 
-    function init() {
-      if (apiRef.current) { try { apiRef.current.dispose(); } catch(e){} apiRef.current = null; }
+    function startJitsi() {
       if (!containerRef.current) return;
+      if (apiRef.current) { try { apiRef.current.dispose(); } catch(e){} apiRef.current = null; }
+
       try {
         apiRef.current = new window.JitsiMeetExternalAPI('meet.jit.si', {
-          roomName: 'dexam-viva-' + String(roomName).replace(/[^a-zA-Z0-9]/g, ''),
+          roomName: cleanRoom,
           width: '100%',
           height: height || 380,
           parentNode: containerRef.current,
-          userInfo: { displayName: displayName || 'User' },
+          userInfo: { displayName: displayName || 'User', email: '' },
           configOverwrite: {
             prejoinPageEnabled: false,
             startWithAudioMuted: false,
@@ -24,11 +27,13 @@ export default function JitsiMeet({ roomName, displayName, height }) {
             disableDeepLinking: true,
             enableWelcomePage: false,
             requireDisplayName: false,
-            hideConferenceSubject: true,
             toolbarButtons: ['microphone', 'camera', 'fullscreen', 'tileview'],
             disablePolls: true,
             disableReactions: true,
-            subject: 'DExam Viva',
+            hideConferenceSubject: true,
+            defaultLocalDisplayName: displayName || 'User',
+            // Auto-join without needing to type name
+            p2p: { enabled: true },
           },
           interfaceConfigOverwrite: {
             SHOW_JITSI_WATERMARK: false,
@@ -40,36 +45,57 @@ export default function JitsiMeet({ roomName, displayName, height }) {
             TOOLBAR_BUTTONS: ['microphone', 'camera', 'fullscreen', 'tileview'],
             SETTINGS_SECTIONS: ['devices'],
             MOBILE_APP_PROMO: false,
+            DEFAULT_LOCAL_DISPLAY_NAME: displayName || 'User',
           }
         });
-        // Rejoin if accidentally leaves
-        apiRef.current.addListener('videoConferenceLeft', function() {
-          if (containerRef.current) setTimeout(function() { if (containerRef.current) init(); }, 2000);
+
+        apiRef.current.addListener('videoConferenceJoined', function() {
+          setStatus('joined');
         });
-      } catch(e) { console.error('[Jitsi] init failed:', e); }
+
+        apiRef.current.addListener('videoConferenceLeft', function() {
+          setStatus('loading');
+          setTimeout(function() { if (containerRef.current) startJitsi(); }, 2000);
+        });
+
+        setStatus('connecting');
+      } catch(e) {
+        console.error('[Jitsi] init failed:', e);
+        setStatus('error');
+      }
     }
 
-    if (window.JitsiMeetExternalAPI) {
-      init();
-    } else {
+    function loadScript() {
+      if (window.JitsiMeetExternalAPI) { setTimeout(startJitsi, 100); return; }
       var existing = document.querySelector('script[src*="meet.jit.si/external_api"]');
-      if (existing) { existing.addEventListener('load', function() { setTimeout(init, 300); }); return; }
-      var script = document.createElement('script');
-      script.src = 'https://meet.jit.si/external_api.js';
-      script.async = true;
-      script.onload = function() { setTimeout(init, 300); };
-      script.onerror = function() { console.error('[Jitsi] script failed to load'); };
-      document.head.appendChild(script);
+      if (existing) { existing.addEventListener('load', function(){ setTimeout(startJitsi, 100); }); return; }
+      var s = document.createElement('script');
+      s.src = 'https://meet.jit.si/external_api.js';
+      s.async = true;
+      s.onload = function() { setTimeout(startJitsi, 300); };
+      s.onerror = function() { setStatus('error'); };
+      document.head.appendChild(s);
     }
+
+    loadScript();
 
     return function() {
       if (apiRef.current) { try { apiRef.current.dispose(); } catch(e){} apiRef.current = null; }
     };
-  }, [roomName]); // eslint-disable-line
+  }, [roomName, displayName]); // eslint-disable-line
 
   return (
-    <div style={{ width:'100%', borderRadius:8, overflow:'hidden', background:'#1a1a2e', minHeight: height || 380 }}>
-      <div ref={containerRef} style={{ width:'100%', minHeight: height || 380 }}/>
+    <div style={{ position:'relative', width:'100%', borderRadius:8, overflow:'hidden', background:'#1a1a2e', minHeight: height||380 }}>
+      {status !== 'joined' && (
+        <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', zIndex:1, background:'rgba(26,26,46,0.9)', gap:12 }}>
+          <div className="spinner" style={{ width:32, height:32 }}/>
+          <div style={{ color:'#9ca3af', fontSize:'0.85rem' }}>
+            {status === 'error' ? '❌ Could not connect to video' : status === 'connecting' ? 'Connecting to video room…' : 'Loading video…'}
+          </div>
+          <div style={{ color:'#6b7280', fontSize:'0.75rem' }}>Room: {String(roomName).slice(0,8)}…</div>
+        </div>
+      )}
+      <div ref={containerRef} style={{ width:'100%', minHeight: height||380 }}/>
     </div>
   );
 }

@@ -99,7 +99,11 @@ router.get('/student/:id', authenticateToken, async (req, res) => {
     }
     
     const [submissions] = await pool.query(`
-      SELECT s.*, e.title, e.total_marks, r.total_score, r.grade, r.cheating_detected
+      SELECT s.*, e.title, e.total_marks, r.total_score, r.grade, r.cheating_detected,
+        (SELECT COUNT(*) FROM answers a JOIN questions q ON a.question_id = q.question_id
+         WHERE a.submission_id = s.submission_id AND q.question_type IN ('MCQ','TRUE_FALSE')
+         AND a.answer_text = q.correct_answer) as correct_count,
+        (SELECT COUNT(*) FROM questions WHERE exam_id = s.exam_id) as total_questions
       FROM submissions s
       JOIN exams e ON s.exam_id = e.exam_id
       LEFT JOIN results r ON s.submission_id = r.submission_id

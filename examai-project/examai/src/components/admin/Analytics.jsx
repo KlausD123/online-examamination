@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useStore } from '../../store/useStore';
+import { apiGet } from '../../utils/api';
 
 var GRADE_COLORS = { 'A+':'#16a34a', A:'#16a34a', B:'#2563eb', C:'#d97706', D:'#ea580c', F:'#dc2626' };
 function gc(g) { return GRADE_COLORS[g] || '#6b7280'; }
@@ -20,8 +21,7 @@ export default function Analytics() {
       .then(function(d) { setStats(d); setLoading(false); })
       .catch(function() { setLoading(false); });
     // Load viva results separately
-    var { apiGet } = require('../../utils/api');
-    apiGet('/viva/all-results').then(function(d){ setVivaResults(d||[]); }).catch(function(){});
+    apiGet('/viva/all-results').then(function(d){ setVivaResults(d||[]); }).catch(function(){ setVivaResults([]); });
   }, []); // eslint-disable-line
 
   if (loading) return <div className="loading-center"><div className="spinner"></div><span>Loading analytics…</span></div>;

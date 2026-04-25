@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { apiGet } from '../../utils/api';
+import { useStore } from '../../store/useStore';
 
 export default function CourseProgress() {
+  var store = useStore();
   var [courses, setCourses] = useState([]);
   var [selected, setSelected] = useState(null);
   var [exams, setExams] = useState([]);
   var [subs, setSubs] = useState([]);
   var [loading, setLoading] = useState(true);
-  var store = require('../../store/useStore').useStore();
 
   useEffect(function() {
     Promise.all([apiGet('/courses/my'), apiGet('/exams'), store.currentUser ? store.loadSubmissions(store.currentUser.user_id) : Promise.resolve([])]).then(function(r) {

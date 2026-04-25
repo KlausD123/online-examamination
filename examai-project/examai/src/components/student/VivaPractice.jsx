@@ -143,7 +143,7 @@ export default function VivaPractice() {
     setRecording(true); recordingRef.current = true;
 
     var rec = new SR();
-    rec.continuous = false;   // simpler: one utterance at a time
+    rec.continuous = true;
     rec.interimResults = true;
     rec.lang = 'en-US';
 
@@ -159,7 +159,7 @@ export default function VivaPractice() {
       // After 2s of no new speech, auto-grade
       silenceTimer.current = setTimeout(function() {
         if (recordingRef.current) stopListeningAndGrade();
-      }, 2000);
+      }, 1500);
     };
 
     rec.onerror = function(e) {
