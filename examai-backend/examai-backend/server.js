@@ -13,6 +13,7 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 app.use('/api/auth',          require('./routes/auth'));
+app.use('/api/courses',       require('./routes/courses'));
 app.use('/api/exams',         require('./routes/exams'));
 app.use('/api/questions',     require('./routes/questions'));
 app.use('/api/submissions',   require('./routes/submissions'));

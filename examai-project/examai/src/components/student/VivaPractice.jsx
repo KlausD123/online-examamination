@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { groqChat } from '../../utils/aiService';
 import { useStore } from '../../store/useStore';
+import YouTubeResources from '../YouTubeResources';
 
 function parseJSON(raw) {
   try { return JSON.parse(raw.replace(/```json|```/g,'').trim()); } catch(e) {
@@ -633,6 +634,7 @@ export default function VivaPractice() {
               🎯 Exam Readiness: {analysis.predicted_exam_readiness}
             </div>
           )}
+          <YouTubeResources weaknesses={analysis.weak_topics} subject={topic} />
         </div>
       )}
 

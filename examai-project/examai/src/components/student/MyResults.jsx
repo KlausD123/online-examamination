@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useStore } from '../../store/useStore';
 import ResultView from './ResultView';
 import { apiGet } from '../../utils/api';
+import YouTubeResources from '../YouTubeResources';
 
 function gradeColor(g) {
   if (g === 'A+' || g === 'A') return '#16a34a';
@@ -79,6 +80,15 @@ export default function MyResults({ navigate }) {
                 </div>
               );
             })}
+          </div>
+        )}
+        {/* YouTube resources based on weak answers */}
+        {answers.length > 0 && (
+          <div className="card" style={{ marginTop: 16 }}>
+            <YouTubeResources
+              weaknesses={answers.filter(function(a){return !a.correct;}).map(function(a){return a.question;})}
+              subject={vr.title}
+            />
           </div>
         )}
       </div>

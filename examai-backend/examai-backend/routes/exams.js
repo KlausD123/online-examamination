@@ -3,25 +3,45 @@ const router = express.Router();
 const pool = require('../db');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 
-// Get exams (admin sees all they created, student sees published)
+// Get exams (admin sees all they created, student sees global + their course exams)
 router.get('/', authenticateToken, async (req, res) => {
   try {
     let query = '';
     let params = [];
     if (req.user.role === 'admin') {
       query = `
-        SELECT e.*, 
+        SELECT e.*, c.name as course_name,
         (SELECT COUNT(*) FROM questions WHERE exam_id = e.exam_id) as question_count,
         (SELECT COUNT(*) FROM submissions WHERE exam_id = e.exam_id) as submission_count
-        FROM exams e WHERE created_by = ? ORDER BY created_at DESC
+        FROM exams e LEFT JOIN courses c ON e.course_id = c.course_id
+        WHERE e.created_by = ? ORDER BY e.created_at DESC
       `;
       params = [req.user.user_id];
     } else {
+      // Students see:
+      // 1. No-course exams (old global)
+      // 2. Course-global exams from any enrolled course (no specific assignment)
+      // 3. Targeted exams assigned specifically to them
       query = `
-        SELECT e.*, 
-        (SELECT COUNT(*) FROM questions WHERE exam_id = e.exam_id) as question_count
-        FROM exams e WHERE status = 'published' ORDER BY created_at DESC
+        SELECT e.*, c.name as course_name,
+          CASE WHEN ea.student_id IS NOT NULL THEN 'targeted'
+               WHEN e.course_id IS NULL THEN 'global'
+               ELSE 'course' END as access_type,
+          (SELECT COUNT(*) FROM questions WHERE exam_id = e.exam_id) as question_count
+        FROM exams e
+        LEFT JOIN courses c ON e.course_id = c.course_id
+        LEFT JOIN exam_assignments ea ON e.exam_id = ea.exam_id AND ea.student_id = ?
+        WHERE e.status = 'published' AND (
+          e.course_id IS NULL
+          OR ea.student_id IS NOT NULL
+          OR (
+            e.exam_type = 'course_global'
+            AND e.course_id IN (SELECT course_id FROM course_members WHERE student_id = ?)
+          )
+        )
+        ORDER BY e.created_at DESC
       `;
+      params = [req.user.user_id, req.user.user_id];
     }
     const [exams] = await pool.query(query, params);
     res.json(exams);
@@ -33,10 +53,11 @@ router.get('/', authenticateToken, async (req, res) => {
 // Create exam
 router.post('/', requireAdmin, async (req, res) => {
   try {
-    const { title, description, duration_minutes, total_marks, scheduled_at, end_at } = req.body;
+    const { title, description, duration_minutes, total_marks, scheduled_at, end_at, course_id, exam_type } = req.body;
+    const finalType = course_id ? (exam_type || 'course_global') : 'global';
     const [result] = await pool.query(
-      'INSERT INTO exams (title, description, duration_minutes, total_marks, scheduled_at, end_at, created_by, status) VALUES (?, ?, ?, ?, ?, ?, ?, "draft")',
-      [title, description, duration_minutes, total_marks, scheduled_at || null, end_at || null, req.user.user_id]
+      'INSERT INTO exams (title, description, duration_minutes, total_marks, scheduled_at, end_at, created_by, status, course_id, exam_type) VALUES (?, ?, ?, ?, ?, ?, ?, "draft", ?, ?)',
+      [title, description, duration_minutes, total_marks, scheduled_at || null, end_at || null, req.user.user_id, course_id || null, finalType]
     );
     res.status(201).json({ exam_id: result.insertId, message: 'Exam created successfully' });
   } catch (error) {

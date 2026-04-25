@@ -1,6 +1,6 @@
 // ── DExam AI Service — Groq direct calls ─────────────────────
 var GROQ_URL   = 'https://api.groq.com/openai/v1/chat/completions';
-var GROQ_KEY   = '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';
+var GROQ_KEY   = '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';
 var GROQ_MODEL = 'llama-3.3-70b-versatile';
 
 // ── Core Groq call (exported so components can use directly) ──

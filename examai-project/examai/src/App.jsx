@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useStore } from './store/useStore';
+import CoursesPanel from './components/admin/CoursesPanel';
+import MyCourses from './components/student/MyCourses';
 import AuthPage from './components/AuthPage';
 import AdminDashboard from './components/admin/AdminDashboard';
 import CreateExam from './components/admin/CreateExam';
@@ -90,6 +92,7 @@ export default function App() {
         case 'analytics': return React.createElement(Analytics,      null);
         case 'announce':  return React.createElement(Notifications,  null);
         case 'viva':      return React.createElement(VivaRoom,       null);
+        case 'courses':   return React.createElement(CoursesPanel,   null);
         case 'profile':   return React.createElement(StudentProfile, null);
         default:          return React.createElement(AdminDashboard, { navigate: navigate });
       }
@@ -103,6 +106,7 @@ export default function App() {
         case 'viva-practice': return React.createElement(VivaPractice,     null);
         case 'updates':       return React.createElement(Notifications,    null);
         case 'viva':          return React.createElement(VivaJoin,         null);
+        case 'mycourses':     return React.createElement(MyCourses,        null);
         case 'profile':       return React.createElement(StudentProfile,   null);
         default:              return React.createElement(StudentDashboard, { navigate: navigate });
       }

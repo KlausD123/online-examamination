@@ -220,6 +220,9 @@ export default function AvailableExams({ navigate }) {
                   <span className="badge badge-primary">{exam.total_marks} marks</span>
                   <span className="badge badge-info">{exam.question_count} questions</span>
                 </div>
+                {exam.access_type === 'targeted' && <span className="badge badge-danger" style={{ marginBottom:6, display:'inline-block' }}>🎯 Assigned to you</span>}
+                {exam.access_type === 'course' && exam.course_name && <span className="badge badge-info" style={{ marginBottom:6, display:'inline-block' }}>🏫 {exam.course_name}</span>}
+                {exam.access_type === 'global' && <span className="badge" style={{ marginBottom:6, display:'inline-block', background:'rgba(22,163,74,.1)', color:'#16a34a' }}>🌐 Global</span>}
                 {exam.scheduled_at && <div style={{ fontSize: '0.78rem', color: 'var(--text3)', marginBottom: 8 }}>📅 {formatDateTime(exam.scheduled_at)}</div>}
                 {isCompleted ? (
                   <div style={{ display: 'flex', gap: 8 }}>

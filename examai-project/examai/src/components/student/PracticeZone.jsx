@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useStore } from '../../store/useStore';
 
 const GROQ_URL   = 'https://api.groq.com/openai/v1/chat/completions';
-const GROQ_KEY   = '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';
+const GROQ_KEY   = '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';
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
 
 async function groqChat(sys, usr, max, temp) {

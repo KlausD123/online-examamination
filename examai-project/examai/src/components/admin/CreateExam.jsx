@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useStore } from '../../store/useStore';
 import { generateExamQuestions, generateQuestions } from '../../utils/aiService';
+import { apiGet, apiPost } from '../../utils/api';
 
 var DRAFT_KEY   = 'examai_draft_exam';
 var SESSION_KEY = 'ce_session'; // CreateExam in-progress state
@@ -35,6 +36,12 @@ export default function CreateExam({ navigate, editExam }) {
   var [aiLoading,      setAiLoading]      = useState(false);
   var [generated,      setGenerated]      = useState(_s.generated || []);
 
+  // Course / visibility
+  var [courses,        setCourses]        = useState([]);
+  var [examScope,      setExamScope]      = useState('global');
+  var [courseMembers,  setCourseMembers]  = useState([]);
+  var [targetStudents, setTargetStudents] = useState([]);
+
   // Manual
   var [mType,        setMType]        = useState('MCQ');
   var [mDiff,        setMDiff]        = useState('Medium');
@@ -47,6 +54,16 @@ export default function CreateExam({ navigate, editExam }) {
   var [draftBanner,  setDraftBanner]  = useState(null);
 
   // Persist form state on every render (skip when editing existing exam)
+  useEffect(function() {
+    apiGet('/courses').then(function(d){ setCourses(d||[]); }).catch(function(){});
+  }, []); // eslint-disable-line
+
+  useEffect(function() {
+    if (!examScope.startsWith('targeted_')) { setCourseMembers([]); return; }
+    var cid = examScope.replace('targeted_', '');
+    apiGet('/courses/' + cid + '/members').then(function(d){ setCourseMembers(d||[]); }).catch(function(){});
+  }, [examScope]); // eslint-disable-line
+
   useEffect(function() {
     if (editExam || step === 1 && !examId) {
       // Still on step 1 with no exam created yet — persist form fields
@@ -85,7 +102,13 @@ export default function CreateExam({ navigate, editExam }) {
     e.preventDefault();
     setError(''); setLoading(true);
     try {
-      var r = await store.createExam({ title: title, description: description, duration_minutes: duration, total_marks: totalMarks, scheduled_at: startTime || null, end_at: endTime || null });
+      var finalCourseId = examScope.startsWith('course_') ? examScope.replace('course_','') : examScope.startsWith('targeted_') ? examScope.replace('targeted_','') : null;
+      var finalExamType = examScope === 'global' ? 'global' : examScope.startsWith('targeted_') ? 'targeted' : 'course_global';
+      var r = await store.createExam({ title: title, description: description, duration_minutes: duration, total_marks: totalMarks, scheduled_at: startTime || null, end_at: endTime || null, course_id: finalCourseId, exam_type: finalExamType });
+      // If targeted, assign specific students
+      if (finalExamType === 'targeted' && targetStudents.length > 0) {
+        try { await apiPost('/courses/' + finalCourseId + '/assign-exam', { exam_id: r.exam_id, student_ids: targetStudents }); } catch(e){}
+      }
       setExamId(r.exam_id);
       localStorage.setItem(DRAFT_KEY, JSON.stringify({ exam_id: r.exam_id, title: title, total_marks: totalMarks, saved_at: new Date().toISOString() }));
       saveCS({ step: 2, examId: r.exam_id, title, description, duration, totalMarks, startTime, endTime, qTab, aiTopic, aiType, aiDiff, aiCount, generated: [] });
@@ -239,6 +262,58 @@ export default function CreateExam({ navigate, editExam }) {
           <form onSubmit={handleCreateExam}>
             <div className="form-group"><label className="form-label">Title</label><input className="form-input" value={title} onChange={function(e) { setTitle(e.target.value); }} required /></div>
             <div className="form-group"><label className="form-label">Description</label><textarea className="form-textarea" value={description} onChange={function(e) { setDescription(e.target.value); }} /></div>
+            <div className="form-group">
+              <label className="form-label">Visibility</label>
+              <select className="form-select" value={examScope} onChange={function(e){
+                setExamScope(e.target.value);
+                setCourseId(''); setTargetStudents([]);
+              }}>
+                <option value="global">🌐 Global — all students</option>
+                {courses.map(function(c){ return [
+                  <option key={c.course_id + '_all'} value={'course_' + c.course_id}>🏫 {c.name} — all enrolled</option>,
+                  <option key={c.course_id + '_sel'} value={'targeted_' + c.course_id}>🎯 {c.name} — selected students only</option>
+                ]; })}
+              </select>
+              <div style={{ fontSize:'0.75rem', color:'var(--text3)', marginTop:4 }}>
+                {examScope === 'global' && 'Every registered student can see this exam'}
+                {examScope.startsWith('course_') && 'All students enrolled in this course will see it'}
+                {examScope.startsWith('targeted_') && 'Only the students you select below will see this exam'}
+              </div>
+            </div>
+
+            {/* Student selector for targeted exams */}
+            {examScope.startsWith('targeted_') && (
+              <div className="form-group">
+                <label className="form-label">Select Students</label>
+                {courseMembers.length === 0
+                  ? <div style={{ fontSize:'0.8rem', color:'var(--text3)' }}>Loading enrolled students…</div>
+                  : (
+                    <div style={{ border:'1px solid var(--border)', borderRadius:8, overflow:'hidden', maxHeight:220, overflowY:'auto' }}>
+                      {courseMembers.map(function(m) {
+                        var sel = targetStudents.indexOf(m.user_id) > -1;
+                        return (
+                          <div key={m.user_id} onClick={function(){
+                            setTargetStudents(function(p){ return sel ? p.filter(function(x){return x!==m.user_id;}) : p.concat([m.user_id]); });
+                          }} style={{ display:'flex', alignItems:'center', gap:10, padding:'9px 14px', cursor:'pointer', borderBottom:'1px solid var(--border)', background:sel?'var(--accent-glow)':'transparent' }}>
+                            <span style={{ width:16, height:16, borderRadius:4, border:'2px solid '+(sel?'var(--accent)':'var(--border)'), background:sel?'var(--accent)':'transparent', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+                              {sel && <span style={{ color:'#fff', fontSize:'0.6rem', fontWeight:900 }}>✓</span>}
+                            </span>
+                            <span style={{ fontWeight:sel?700:400 }}>{m.name}</span>
+                            <span style={{ color:'var(--text3)', fontSize:'0.78rem' }}>{m.email}</span>
+                            <span style={{ color:'var(--text3)', fontSize:'0.75rem', marginLeft:'auto' }}>{m.year}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )
+                }
+                {targetStudents.length > 0 && (
+                  <div style={{ marginTop:6, fontSize:'0.8rem', color:'var(--accent)', fontWeight:600 }}>
+                    ✅ {targetStudents.length} student{targetStudents.length!==1?'s':''} selected
+                  </div>
+                )}
+              </div>
+            )}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
               <div className="form-group"><label className="form-label">Duration (minutes)</label><input className="form-input" type="number" value={duration} onChange={function(e) { setDuration(e.target.value === '' ? '' : Number(e.target.value)); }} min={1} placeholder="60" /></div>
               <div className="form-group"><label className="form-label">Total Marks</label><input className="form-input" type="number" value={totalMarks} onChange={function(e) { setTotalMarks(e.target.value === '' ? '' : Number(e.target.value)); }} min={1} placeholder="100" /></div>

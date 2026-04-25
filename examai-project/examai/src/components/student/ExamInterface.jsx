@@ -2,41 +2,32 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useStore } from '../../store/useStore';
 import { apiPost } from '../../utils/api';
 
-// ── Load face-api.js from CDN once ──────────────────────────────────────────
-var FACE_API_LOADED  = false;
-var FACE_API_LOADING = false;
-var FACE_API_CBS     = [];
-var MODEL_BASE_URL   = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
+// ── Groq Vision proctoring ───────────────────────────────────────────────────
+var GROQ_KEY = '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';
 
-function loadFaceAPI() {
-  return new Promise(function(resolve, reject) {
-    if (FACE_API_LOADED) { resolve(); return; }
-    FACE_API_CBS.push({ resolve: resolve, reject: reject });
-    if (FACE_API_LOADING) return;
-    FACE_API_LOADING = true;
-    var script = document.createElement('script');
-    script.src = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js';
-    script.onload = function() {
-      // Load only the tiny model — fast, runs in browser, detects face count
-      var fapi = window.faceapi;
-      Promise.all([
-        fapi.nets.tinyFaceDetector.loadFromUri(MODEL_BASE_URL),
-        fapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_BASE_URL),
-      ]).then(function() {
-        FACE_API_LOADED = true;
-        FACE_API_CBS.forEach(function(cb) { cb.resolve(); });
-        FACE_API_CBS = [];
-      }).catch(function(e) {
-        FACE_API_CBS.forEach(function(cb) { cb.reject(e); });
-        FACE_API_CBS = [];
-      });
-    };
-    script.onerror = function(e) {
-      FACE_API_CBS.forEach(function(cb) { cb.reject(new Error('Failed to load face-api.js')); });
-      FACE_API_CBS = [];
-    };
-    document.head.appendChild(script);
-  });
+async function checkFrameWithGroq(videoEl) {
+  try {
+    var canvas = document.createElement('canvas');
+    canvas.width = 320; canvas.height = 240;
+    var ctx = canvas.getContext('2d');
+    ctx.drawImage(videoEl, 0, 0, 320, 240);
+    var base64 = canvas.toDataURL('image/jpeg', 0.6).split(',')[1];
+    var resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + GROQ_KEY },
+      body: JSON.stringify({
+        model: 'llama-3.2-11b-vision-preview',
+        max_tokens: 50,
+        messages: [{ role: 'user', content: [
+          { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + base64 } },
+          { type: 'text', text: 'How many people are visible in this image? Reply with ONLY a single number (0, 1, 2, etc). No other text.' }
+        ]}]
+      })
+    });
+    var data = await resp.json();
+    var text = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '1').trim();
+    return parseInt(text) || 0;
+  } catch(e) { return 1; } // Default to 1 on error (don't false-flag)
 }
 
 export default function ExamInterface({ exam, submissionId, onComplete }) {
@@ -63,7 +54,52 @@ export default function ExamInterface({ exam, submissionId, onComplete }) {
   var [voiceAlert,  setVoiceAlert]  = useState(false);
   var [faceApiReady,setFaceApiReady]= useState(false);
 
-  var cheatedRef      = useRef(false);
+  var [aiWrittenLoading, setAiWrittenLoading] = useState(null); // question_id being checked
+  var [aiWrittenResult,  setAiWrittenResult]  = useState(null); // { qid, isAI, confidence, reason }
+  var [gradingWritten,   setGradingWritten]   = useState(null); // question_id being graded
+  var [writtenGrade,     setWrittenGrade]     = useState(null); // { qid, verdict, score_pct, feedback }
+
+  async function checkAIWritten(qid, text) {
+    setAiWrittenLoading(qid);
+    setAiWrittenResult(null);
+    try {
+      var resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + GROQ_KEY },
+        body: JSON.stringify({
+          model: 'llama-3.3-70b-versatile',
+          max_tokens: 120, temperature: 0.1,
+          messages: [{ role: 'user', content: 'Analyze if this student answer was written by AI or a human. Look for: unnaturally perfect structure, generic phrasing, no personal errors, overly formal tone.\n\nAnswer: "' + text + '"\n\nReturn ONLY JSON: {"isAI":true/false,"confidence":0-100,"reason":"one sentence"}' }]
+        })
+      });
+      var data = await resp.json();
+      var raw = data.choices[0].message.content.trim();
+      var result = JSON.parse(raw.replace(/```json|```/g, '').trim());
+      setAiWrittenResult({ qid: qid, ...result });
+    } catch(e) { setAiWrittenResult({ qid: qid, isAI: false, confidence: 0, reason: 'Check failed' }); }
+    setAiWrittenLoading(null);
+  }
+
+  async function gradeWritten(qid, question, modelAnswer, studentAnswer) {
+    setGradingWritten(qid);
+    setWrittenGrade(null);
+    try {
+      var resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + GROQ_KEY },
+        body: JSON.stringify({
+          model: 'llama-3.3-70b-versatile',
+          max_tokens: 150, temperature: 0.2,
+          messages: [{ role: 'user', content: 'Grade this student answer based on concept understanding, not word matching. Short clear answers showing understanding score well.\n\nQuestion: ' + question + '\nModel Answer (reference only): ' + (modelAnswer||'N/A') + '\nStudent Answer: ' + studentAnswer + '\n\nReturn ONLY JSON: {"verdict":"Correct|Partially Correct|Incorrect","score_pct":0-100,"feedback":"1-2 sentences"}' }]
+        })
+      });
+      var data = await resp.json();
+      var raw = data.choices[0].message.content.trim();
+      var result = JSON.parse(raw.replace(/```json|```/g, '').trim());
+      setWrittenGrade({ qid: qid, ...result });
+    } catch(e) { setWrittenGrade({ qid: qid, verdict: 'Error', score_pct: 0, feedback: 'Grading failed' }); }
+    setGradingWritten(null);
+  }
   var violRef         = useRef(0);
   var submittingRef   = useRef(false);
   var videoRef        = useRef(null);
@@ -142,8 +178,6 @@ export default function ExamInterface({ exam, submissionId, onComplete }) {
         }
       }, 200);
 
-      // Start audio monitoring
-      startAudioMonitor(stream);
 
     } catch (e) {
       setCamError('Camera / mic unavailable. ' + (e.message || ''));
@@ -154,7 +188,6 @@ export default function ExamInterface({ exam, submissionId, onComplete }) {
   function stopMonitoring() {
     clearInterval(faceIntervalRef.current);
     clearInterval(voiceIntervalRef.current);
-    if (audioCtxRef.current) { try { if (audioCtxRef.current.state !== 'closed') audioCtxRef.current.close(); } catch (e) {} audioCtxRef.current = null; }
     if (streamRef.current) { streamRef.current.getTracks().forEach(function (t) { t.stop(); }); }
   }
 
@@ -172,72 +205,40 @@ export default function ExamInterface({ exam, submissionId, onComplete }) {
     }
   }
 
-  // ── Face detection (face-api.js) ───────────────────────────
-  async function startFaceDetection() {
-    try {
-      await loadFaceAPI();
-      setFaceApiReady(true);
-      setFaceStatus('ok');
+  // ── Face detection via Groq Vision (every 10s) ──────────────
+  function startFaceDetection() {
+    setFaceApiReady(true);
+    setFaceStatus('ok');
 
-      var fapi = window.faceapi;
-      var options = new fapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.25 }); // larger input = better detection, lower threshold = fewer false 'no face'
+    faceIntervalRef.current = setInterval(async function() {
+      if (!videoRef.current || videoRef.current.readyState < 2) return;
+      if (cheatedRef.current || submittingRef.current) return;
 
-      faceIntervalRef.current = setInterval(async function () {
-        if (!videoRef.current || videoRef.current.readyState < 2) return;
-        if (cheatedRef.current || submittingRef.current) return;
+      var count = await checkFrameWithGroq(videoRef.current);
+      setFaceCount(count);
 
-        try {
-          // Detect all faces with landmarks (landmark model is tiny/fast)
-          // SSD MobileNet v1 is much more accurate than TinyFaceDetector for face counting
-          var ssdOptions = new fapi.SsdMobilenetv1Options({ minConfidence: 0.4, maxResults: 10 });
-          var detections = await fapi.detectAllFaces(videoRef.current, ssdOptions);
-          var count = detections ? detections.length : 0;
-          setFaceCount(count);
-
-          // ── No face detected ─────────────────────────────
-          if (count === 0) {
-            noFaceFramesRef.current++;
-            multiFaceFramesRef.current = 0;
-            setFaceStatus('no_face');
-            if (noFaceFramesRef.current >= 30) {   // ~15s of no face before violation
-              noFaceFramesRef.current = 0;
-              triggerViolation('No face detected in camera for extended period — student may have left');
-            }
-          }
-          // ── Multiple faces detected ───────────────────────
-          else if (count > 1) {
-            multiFaceFramesRef.current++;
-            noFaceFramesRef.current = 0;
-            setFaceStatus('multiple');
-            if (multiFaceFramesRef.current >= 12) {  // ~6s continuous multiple faces
-              multiFaceFramesRef.current = 0;
-              triggerViolation('Multiple people detected in camera — only the student should be present');
-            }
-          }
-          // ── One face — check if looking at screen ─────────
-          else {
-            noFaceFramesRef.current   = 0;
-            multiFaceFramesRef.current= 0;
-            setFaceStatus('ok');
-
-            // Face detected and present — mark as OK
-            setFaceStatus('ok');
-          }
-
-          // Draw detection overlay on canvas
-          drawOverlay(detections, count);
-
-        } catch (detErr) {
-          // Ignore per-frame errors
+      if (count === 0) {
+        noFaceFramesRef.current++;
+        setFaceStatus('no_face');
+        if (noFaceFramesRef.current >= 2) { // 2 consecutive checks (~20s)
+          noFaceFramesRef.current = 0;
+          triggerViolation('No person detected in camera — please stay in frame');
         }
-      }, 500); // Check every 500ms
+      } else if (count > 1) {
+        multiFaceFramesRef.current++;
+        noFaceFramesRef.current = 0;
+        setFaceStatus('multiple');
+        if (multiFaceFramesRef.current >= 2) { // 2 consecutive checks (~20s)
+          multiFaceFramesRef.current = 0;
+          triggerViolation('Multiple people detected — only the exam taker should be visible');
+        }
+      } else {
+        noFaceFramesRef.current = 0;
+        multiFaceFramesRef.current = 0;
+        setFaceStatus('ok');
+      }
 
-    } catch (loadErr) {
-      // face-api.js failed to load (network issue etc.) — fall back to basic mode
-      setFaceStatus('fallback');
-      setFaceApiReady(false);
-      console.warn('Face detection unavailable:', loadErr.message);
-    }
+    }, 2000); // Check every 2 seconds via Groq Vision
   }
 
   function drawOverlay(detections, count) {
@@ -506,6 +507,7 @@ export default function ExamInterface({ exam, submissionId, onComplete }) {
       )}
 
       {/* ── Header bar ── */}
+      <style>{'.toast-container, .topbar, .nav-sidebar { display: none !important; }'}</style>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14, padding:'12px 18px', background:'var(--surface)', borderRadius:12, border:'1px solid var(--border)', boxShadow:'var(--shadow-sm)', flexWrap:'wrap', gap:10 }}>
         <div>
           <div style={{ fontWeight:700, fontSize:'1.05rem' }}>{exam.title}</div>
@@ -572,7 +574,34 @@ export default function ExamInterface({ exam, submissionId, onComplete }) {
               )}
 
               {(q.question_type==='SHORT_ANSWER'||q.question_type==='DESCRIPTIVE') && (
-                <textarea className="form-textarea" value={answers[q.question_id]||''} onChange={function(e){setAnswer(q.question_id,e.target.value);}} rows={q.question_type==='DESCRIPTIVE'?6:3} placeholder="Type your answer..."/>
+                <div>
+                  <textarea className="form-textarea" value={answers[q.question_id]||''} onChange={function(e){setAnswer(q.question_id,e.target.value);}} rows={q.question_type==='DESCRIPTIVE'?6:3} placeholder="Type your answer..."/>
+                  {answers[q.question_id] && answers[q.question_id].length > 30 && (
+                    <div style={{ marginTop:8, display:'flex', gap:8 }}>
+                      <button type="button" className="btn btn-outline btn-sm" onClick={function(){checkAIWritten(q.question_id, answers[q.question_id]);}} disabled={aiWrittenLoading===q.question_id}>
+                        {aiWrittenLoading===q.question_id ? '⚡ Checking…' : '🤖 Check AI-Generated'}
+                      </button>
+                      <button type="button" className="btn btn-outline btn-sm" onClick={function(){gradeWritten(q.question_id, q.question_text, q.correct_answer||q.explanation||'', answers[q.question_id]);}} disabled={gradingWritten===q.question_id}>
+                        {gradingWritten===q.question_id ? '⚡ Grading…' : '📊 Preview Grade'}
+                      </button>
+                    </div>
+                  )}
+                  {aiWrittenResult && aiWrittenResult.qid === q.question_id && (
+                    <div style={{ marginTop:8, padding:'8px 12px', borderRadius:8, background: aiWrittenResult.isAI ? 'rgba(220,38,38,.08)' : 'rgba(22,163,74,.08)', border:'1px solid '+(aiWrittenResult.isAI?'rgba(220,38,38,.3)':'rgba(22,163,74,.3)'), fontSize:'0.82rem' }}>
+                      <strong style={{ color: aiWrittenResult.isAI?'#dc2626':'#16a34a' }}>
+                        {aiWrittenResult.isAI ? '🚨 Likely AI-generated' : '✅ Appears human-written'}
+                      </strong>
+                      <span style={{ color:'var(--text3)', marginLeft:8 }}>Confidence: {aiWrittenResult.confidence}%</span>
+                      {aiWrittenResult.reason && <div style={{ color:'var(--text3)', marginTop:4, fontSize:'0.78rem' }}>{aiWrittenResult.reason}</div>}
+                    </div>
+                  )}
+                  {writtenGrade && writtenGrade.qid === q.question_id && (
+                    <div style={{ marginTop:8, padding:'8px 12px', borderRadius:8, background:'rgba(124,58,237,.08)', border:'1px solid rgba(124,58,237,.25)', fontSize:'0.82rem' }}>
+                      <strong style={{ color:'var(--accent)' }}>Preview: {writtenGrade.verdict} — {writtenGrade.score_pct}%</strong>
+                      {writtenGrade.feedback && <div style={{ color:'var(--text3)', marginTop:4, fontSize:'0.78rem' }}>{writtenGrade.feedback}</div>}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           )}
