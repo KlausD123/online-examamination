@@ -183,10 +183,31 @@ export default function Analytics() {
                       <div>
                         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:4 }}>
                           <div style={{ fontWeight:700, fontSize:'1.1rem' }}>{exam.title}</div>
-                          <button className="btn btn-outline btn-sm" onClick={function(){
-                            downloadCSV(exam.title.replace(/[^a-z0-9]/gi,'_')+'_results.csv',
-                              detail.filter(function(r){return r.exam_id===exam.exam_id;}),
-                              ['student_name','total_score','grade','correct_count','wrong_count','status']);
+                          <button className="btn btn-outline btn-sm" onClick={async function(){
+                            try {
+                              var rows = await apiGet('/analytics/exam/' + exam.exam_id + '/csv');
+                              var headers = ['Student','Email','Dept','Year','Score','Total Marks','%','Grade','Correct','Total Qs','Status','Cheating','Start Time'];
+                              var csvRows = [headers.join(',')];
+                              (rows||[]).forEach(function(r){
+                                var pct = r.total_marks > 0 ? Math.round((r.total_score||0)/r.total_marks*100) : 0;
+                                csvRows.push([
+                                  '"'+(r.student_name||'').replace(/"/g,"'")+'"',
+                                  r.student_email||'',
+                                  r.department||'',
+                                  r.year||'',
+                                  r.total_score||0,
+                                  r.total_marks||0,
+                                  pct+'%',
+                                  r.grade||'F',
+                                  r.correct_count||0,
+                                  r.total_questions||0,
+                                  r.status||'',
+                                  r.cheating_detected?'Yes':'No',
+                                  r.start_time ? new Date(r.start_time).toLocaleString() : ''
+                                ].join(','));
+                              });
+                              downloadCSV(exam.title.replace(/[^a-z0-9]/gi,'_')+'_results.csv', csvRows);
+                            } catch(e) { alert('Export failed: ' + e.message); }
                           }}>📥 Export CSV</button>
                         </div>
                         <div style={{ fontSize:'0.78rem', color:'var(--text3)' }}>{exam.total_marks} marks · {exam.submission_count} submissions</div>
@@ -322,7 +343,19 @@ export default function Analytics() {
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
                 <div style={{ fontWeight:700, fontSize:'1.05rem' }}>🎙 Viva Results — All Students</div>
                 <button className="btn btn-outline btn-sm" onClick={function(){
-                  downloadCSV('viva_results.csv', vivaResults, ['student_name','student_email','title','topic','total_score','grade','correct_count','total_questions','created_at']);
+                  var vivaHeaders = ['Student,Email,Session,Topic,Score (%),Grade,Correct,Total Questions,Date'];
+                  (vivaResults||[]).forEach(function(r){
+                    vivaHeaders.push([
+                      '"'+(r.student_name||'').replace(/"/g,"'")+'"',
+                      r.student_email||'',
+                      '"'+(r.title||'').replace(/"/g,"'")+'"',
+                      '"'+(r.topic||'').replace(/"/g,"'")+'"',
+                      r.total_score||0, r.grade||'F',
+                      r.correct_count||0, r.total_questions||0,
+                      r.created_at ? new Date(r.created_at).toLocaleDateString() : ''
+                    ].join(','));
+                  });
+                  downloadCSV('viva_results.csv', vivaHeaders);
                 }}>📥 Export CSV</button>
               </div>
               <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.85rem' }}>
