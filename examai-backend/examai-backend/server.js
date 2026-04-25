@@ -60,6 +60,53 @@ app.post('/api/ai/vision', require('./middleware/auth').authenticateToken, async
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+
+app.post('/api/ai/transcribe', require('./middleware/auth').authenticateToken, async (req, res) => {
+  // Accepts base64 audio, sends to Groq Whisper for transcription
+  const { audio, mimeType } = req.body;
+  if (!audio) return res.status(400).json({ error: 'audio required' });
+  if (!process.env.GROQ_API_KEY) return res.status(503).json({ error: 'AI not configured' });
+  try {
+    // Decode base64 to buffer
+    const buffer = Buffer.from(audio, 'base64');
+    const ext    = (mimeType || 'audio/webm').includes('mp4') ? 'mp4'
+                 : (mimeType || '').includes('ogg') ? 'ogg' : 'webm';
+
+    // Build multipart form manually
+    const boundary = '----FormBoundary' + Math.random().toString(36).slice(2);
+    const CRLF = '\r\n';
+
+    const pre = Buffer.from(
+      '--' + boundary + CRLF +
+      'Content-Disposition: form-data; name="file"; filename="audio.' + ext + '"' + CRLF +
+      'Content-Type: ' + (mimeType || 'audio/webm') + CRLF + CRLF
+    );
+    const modelField = Buffer.from(
+      CRLF + '--' + boundary + CRLF +
+      'Content-Disposition: form-data; name="model"' + CRLF + CRLF +
+      'whisper-large-v3-turbo' +
+      CRLF + '--' + boundary + CRLF +
+      'Content-Disposition: form-data; name="response_format"' + CRLF + CRLF +
+      'json' +
+      CRLF + '--' + boundary + '--' + CRLF
+    );
+    const body = Buffer.concat([pre, buffer, modelField]);
+
+    const r = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + process.env.GROQ_API_KEY,
+        'Content-Type': 'multipart/form-data; boundary=' + boundary,
+        'Content-Length': body.length,
+      },
+      body,
+    });
+    const data = await r.json();
+    if (data.error) return res.status(500).json({ error: data.error.message || 'Whisper error' });
+    res.json({ text: data.text || '' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Debug endpoint — see all rooms and who's in them
 app.get('/api/debug/rooms', (req, res) => {
   const result = {};
@@ -126,9 +173,19 @@ io.on('connection', (socket) => {
     socket.to(data.vivaId).emit('webrtc-ice-candidate', { candidate: data.candidate, fromSocketId: socket.id });
   });
 
-  // Admin sends question text → relay to student so they can read it
+  // Admin sends question text → relay to student so they can read it + speak it via TTS
   socket.on('question-text', (data) => {
     socket.to(data.vivaId).emit('question-text', { text: data.text });
+  });
+
+  // Student sends live answer words → relay to admin for display
+  socket.on('student-answer-live', (data) => {
+    socket.to(data.vivaId).emit('student-answer-live', { text: data.text, interim: data.interim || '' });
+  });
+
+  // Student sends final confirmed answer → relay to admin for grading
+  socket.on('student-answer-final', (data) => {
+    socket.to(data.vivaId).emit('student-answer-final', { text: data.text });
   });
 
   socket.on('request-camera', (data) => {

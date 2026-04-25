@@ -621,43 +621,96 @@ export default function VivaRoom() {
     }, 2000);
   }
 
-  // ── STT on admin browser — hears student voice coming through Jitsi ──
-  function startSTT() {
-    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) { setStatusMsg('Speech recognition not available in this browser'); return; }
+  // ── Groq Whisper STT — records admin mic (hears student via Jitsi) ──
+  var mediaRecRef    = useRef(null);   // MediaRecorder
+  var audioChunks    = useRef([]);
+  var whisperTimer   = useRef(null);
+  var whisperRunning = useRef(false);
+
+  async function startSTT() {
     stopSTT();
-    var rec = new SR();
-    rec.continuous = true; rec.interimResults = true; rec.lang = 'en-US'; rec.maxAlternatives = 1;
+    whisperRunning.current = true;
+    try {
+      var stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      startWhisperLoop(stream);
+    } catch(e) {
+      setStatusMsg('Mic access denied — allow microphone to capture student answer');
+      whisperRunning.current = false;
+    }
+  }
 
-    rec.onresult = function(e) {
-      clearTimeout(silenceTimer.current);
-      var confirmed = '', interim = '';
-      for (var i = e.resultIndex; i < e.results.length; i++) {
-        if (e.results[i].isFinal) confirmed += e.results[i][0].transcript + ' ';
-        else interim += e.results[i][0].transcript;
-      }
-      if (confirmed) {
-        capturedRef.current += confirmed;
-        setCapturedText(capturedRef.current.trim());
-      }
-      setLiveWords(interim);
-      clearTimeout(silenceTimer.current);
-      silenceTimer.current = setTimeout(function() {
-        if (flowRef.current === 'listening' && capturedRef.current.trim().length > 0) doGradeAndWait();
-      }, 4000);
+  function startWhisperLoop(stream) {
+    if (!whisperRunning.current) return;
+    audioChunks.current = [];
+
+    // Pick best supported format
+    var mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus'
+                 : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm'
+                 : MediaRecorder.isTypeSupported('audio/ogg') ? 'audio/ogg'
+                 : 'audio/mp4';
+
+    var mr = new MediaRecorder(stream, { mimeType: mimeType });
+    mediaRecRef.current = mr;
+
+    mr.ondataavailable = function(e) {
+      if (e.data && e.data.size > 0) audioChunks.current.push(e.data);
     };
 
-    rec.onerror = function(ev) {
-      if (ev.error !== 'no-speech' && ev.error !== 'aborted') setStatusMsg('Mic: ' + ev.error);
+    mr.onstop = async function() {
+      if (!whisperRunning.current) return;
+      if (audioChunks.current.length === 0) { startWhisperLoop(stream); return; }
+      var blob = new Blob(audioChunks.current, { type: mimeType });
+      // Skip tiny blobs (silence) — Whisper min is ~0.1s
+      if (blob.size < 3000) { startWhisperLoop(stream); return; }
+
+      // Convert to base64 and send to backend
+      try {
+        var reader = new FileReader();
+        reader.onload = async function() {
+          var base64 = reader.result.split(',')[1];
+          try {
+            var resp = await fetch(API + '/ai/transcribe', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('examai_token') },
+              body: JSON.stringify({ audio: base64, mimeType: mimeType })
+            });
+            var data = await resp.json();
+            var text = (data.text || '').trim();
+            if (text && flowRef.current === 'listening') {
+              capturedRef.current += text + ' ';
+              setCapturedText(capturedRef.current.trim());
+              setLiveWords('');
+              clearTimeout(silenceTimer.current);
+              silenceTimer.current = setTimeout(function() {
+                if (flowRef.current === 'listening' && capturedRef.current.trim().length > 0) doGradeAndWait();
+              }, 5000);
+            }
+          } catch(err) { console.warn('[Whisper] fetch error:', err); }
+          // Continue loop
+          if (whisperRunning.current) startWhisperLoop(stream);
+        };
+        reader.readAsDataURL(blob);
+      } catch(e) {
+        if (whisperRunning.current) startWhisperLoop(stream);
+      }
     };
-    rec.onend = function() {
-      if (recRef.current && flowRef.current === 'listening') { try { rec.start(); } catch(ex) {} }
-    };
-    rec.start(); recRef.current = rec;
+
+    mr.start();
+    // Record in 6-second chunks — good balance of latency vs accuracy
+    whisperTimer.current = setTimeout(function() {
+      if (mr.state === 'recording') mr.stop();
+    }, 6000);
   }
 
   function stopSTT() {
-    clearTimeout(silenceTimer.current); setLiveWords('');
+    whisperRunning.current = false;
+    clearTimeout(silenceTimer.current);
+    clearTimeout(whisperTimer.current);
+    setLiveWords('');
+    if (mediaRecRef.current && mediaRecRef.current.state !== 'inactive') {
+      try { mediaRecRef.current.stop(); } catch(e) {}
+    }
+    mediaRecRef.current = null;
     if (recRef.current) { try { recRef.current.stop(); } catch(e) {} recRef.current = null; }
   }
 
