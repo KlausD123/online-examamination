@@ -149,12 +149,13 @@ export default function Analytics() {
       {tab === 'exams' && (
         <div>
           {examList.length === 0
-            ? <div className="empty-state"><div className="empty-state-title">No exams with submissions yet</div></div>
+            ? <div className="empty-state"><div className="empty-state-icon">📝</div><div className="empty-state-title">No exams with submissions yet</div></div>
             : <div>
               {/* Horizontal exam selector tabs */}
               <div style={{ display:'flex', gap:8, overflowX:'auto', paddingBottom:4, marginBottom:20, scrollbarWidth:'none' }}>
                 {examList.map(function(e) {
-                  var isSelTab = (selExamTab ? selExamTab.exam_id : examList[0].exam_id) === e.exam_id;
+                  var curId = selExamTab ? selExamTab.exam_id : (examList[0] ? examList[0].exam_id : -1);
+                  var isSelTab = curId === e.exam_id;
                   return (
                     <button key={e.exam_id} onClick={function(){ setSelExamTab(e); }}
                       style={{ padding:'8px 16px', borderRadius:20, border:'2px solid '+(isSelTab?'var(--accent)':'var(--border)'), background:isSelTab?'var(--accent-glow)':'var(--surface)', color:isSelTab?'var(--accent)':'var(--text3)', fontWeight:isSelTab?700:400, whiteSpace:'nowrap', cursor:'pointer', fontSize:'0.85rem', flexShrink:0 }}>
@@ -165,7 +166,8 @@ export default function Analytics() {
               </div>
               {/* Selected exam detail */}
               {function() {
-                var exam = selExamTab || examList[0];
+                var exam = selExamTab || (examList.length > 0 ? examList[0] : null);
+                if (!exam) return null;
                 var passRate = exam.submission_count > 0 ? Math.round((exam.passed_count / exam.submission_count) * 100) : 0;
                 var avgPct = exam.total_marks > 0 ? Math.round(((exam.avg_score || 0) / exam.total_marks) * 100) : 0;
                 var gc2 = avgPct >= 80 ? '#16a34a' : avgPct >= 50 ? '#d97706' : '#dc2626';

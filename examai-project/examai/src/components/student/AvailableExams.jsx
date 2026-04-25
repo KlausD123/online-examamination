@@ -49,15 +49,18 @@ export default function AvailableExams({ navigate }) {
   }
 
   // Step 1: validate then show camera check
-  function handleStartExam(exam) {
+  async function handleStartExam(exam) {
     setError('');
     if (exam.question_count === 0) { setError('This exam has no questions yet'); return; }
     var now = new Date();
     if (exam.scheduled_at && new Date(exam.scheduled_at) > now) { setError('Exam has not started yet'); return; }
     if (exam.end_at && new Date(exam.end_at) < now) { setError('Exam has expired'); return; }
-    setCheckingExam(exam);
-    setPermState('idle');
-    setPermError('');
+    // Go directly to exam — skip intermediate camera check screen
+    try {
+      var r = await store.startExam(exam.exam_id);
+      setActiveExam(exam);
+      setActiveSubmission(r.submission_id);
+    } catch(e) { setError(e.message || 'Could not start exam'); }
   }
 
   // Step 2: request camera + mic

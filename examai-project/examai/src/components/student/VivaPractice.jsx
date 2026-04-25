@@ -110,14 +110,26 @@ export default function VivaPractice() {
   var flowActive    = useRef(false);
 
   function speakText(text, onDone) {
-    if (!synthRef.current) { if (onDone) onDone(); return; }
+    if (!synthRef.current || !text) {
+      setTimeout(function() { if (onDone) onDone(); }, 300);
+      return;
+    }
     synthRef.current.cancel();
     setSpeaking(true);
+    var done = false;
+    function finish() {
+      if (done) return; done = true;
+      setSpeaking(false);
+      setTimeout(function() { if (onDone) onDone(); }, 800);
+    }
     var utt = new SpeechSynthesisUtterance(text);
-    utt.rate = 0.88; utt.pitch = 1.0;
-    utt.onend = function() { setSpeaking(false); setTimeout(function() { if (onDone) onDone(); }, 800); };
-    utt.onerror = function() { setSpeaking(false); setTimeout(function() { if (onDone) onDone(); }, 500); };
+    utt.rate = 0.88; utt.pitch = 1.0; utt.lang = 'en-US';
+    utt.onend   = finish;
+    utt.onerror = finish;
     synthRef.current.speak(utt);
+    // Fallback: if onend never fires (browser bug), auto-proceed
+    var fallback = setTimeout(function() { finish(); }, (text.length * 80) + 3000);
+    utt.onend = function() { clearTimeout(fallback); finish(); };
   }
 
   function startListening() {
