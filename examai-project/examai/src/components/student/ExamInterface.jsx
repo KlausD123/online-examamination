@@ -3,7 +3,8 @@ import { useStore } from '../../store/useStore';
 import { apiPost } from '../../utils/api';
 
 // ── Groq Vision proctoring ───────────────────────────────────────────────────
-var GROQ_KEY = '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';
+
+var GROQ_VISION_KEY = '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';
 
 async function checkFrameWithGroq(videoEl) {
   try {
@@ -14,20 +15,22 @@ async function checkFrameWithGroq(videoEl) {
     var base64 = canvas.toDataURL('image/jpeg', 0.6).split(',')[1];
     var resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + GROQ_KEY },
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + GROQ_VISION_KEY },
       body: JSON.stringify({
         model: 'llama-3.2-11b-vision-preview',
-        max_tokens: 50,
+        max_tokens: 10,
         messages: [{ role: 'user', content: [
           { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + base64 } },
-          { type: 'text', text: 'How many people are visible in this image? Reply with ONLY a single number (0, 1, 2, etc). No other text.' }
+          { type: 'text', text: 'Count the number of people/persons visible in this image. Reply with ONLY a single digit number: 0, 1, 2, 3 etc. Nothing else.' }
         ]}]
       })
     });
     var data = await resp.json();
     var text = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '1').trim();
-    return parseInt(text) || 0;
-  } catch(e) { return 1; } // Default to 1 on error (don't false-flag)
+    var num = parseInt(text.match(/\d+/)?.[0]) || 1;
+    console.log('[Proctor] Persons detected:', num);
+    return num;
+  } catch(e) { console.warn('[Proctor] Vision check failed:', e); return 1; }
 }
 
 export default function ExamInterface({ exam, submissionId, onComplete }) {
@@ -101,6 +104,7 @@ export default function ExamInterface({ exam, submissionId, onComplete }) {
     setGradingWritten(null);
   }
   var violRef         = useRef(0);
+  var cheatedRef      = useRef(false);
   var submittingRef   = useRef(false);
   var videoRef        = useRef(null);
   var canvasRef       = useRef(null);

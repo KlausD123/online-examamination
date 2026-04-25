@@ -1,23 +1,18 @@
 import React, { useState } from 'react';
 
-var GROQ_KEY = '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';
+import { apiPost } from '../utils/api';
 
-// Generate YouTube search links based on weakness topics using Groq
+// Generate YouTube search links via backend
 async function getYouTubeLinks(weaknesses, subject) {
   if (!weaknesses || weaknesses.length === 0) return [];
   var prompt = 'Given these weak topics a student needs to improve in ' + (subject||'the subject') + ':\n' +
     weaknesses.map(function(w,i){ return (i+1)+'. '+w; }).join('\n') +
     '\n\nGenerate the best YouTube search queries (one per topic, max 5 words each) to find tutorial videos. Return ONLY valid JSON array:\n[{"topic":"topic name","query":"short youtube search query","why":"one sentence why this helps"}]';
 
-  var resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + GROQ_KEY },
-    body: JSON.stringify({
-      model: 'llama-3.3-70b-versatile', max_tokens: 400, temperature: 0.3,
-      messages: [{ role: 'user', content: prompt }]
-    })
+  var data = await apiPost('/ai/chat', {
+    messages: [{ role: 'user', content: prompt }],
+    max_tokens: 400, temperature: 0.3
   });
-  var data = await resp.json();
   var raw = (data.choices[0].message.content || '').trim().replace(/```json|```/g, '').trim();
   return JSON.parse(raw);
 }

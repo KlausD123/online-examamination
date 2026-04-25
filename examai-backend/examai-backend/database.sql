@@ -148,7 +148,8 @@ CREATE TABLE IF NOT EXISTS courses (
   course_id   INT AUTO_INCREMENT PRIMARY KEY,
   name        VARCHAR(255) NOT NULL,
   description TEXT,
-  join_code   VARCHAR(12) UNIQUE NOT NULL,   -- unique 6-char code students use to join
+  join_code   VARCHAR(12) UNIQUE NOT NULL,
+  course_type ENUM('global','private') DEFAULT 'private',
   created_by  INT NOT NULL,
   created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (created_by) REFERENCES users(user_id)

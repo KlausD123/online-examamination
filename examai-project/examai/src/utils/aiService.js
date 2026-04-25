@@ -1,23 +1,19 @@
 // ── DExam AI Service — Groq direct calls ─────────────────────
-var GROQ_URL   = 'https://api.groq.com/openai/v1/chat/completions';
-var GROQ_KEY   = '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';
-var GROQ_MODEL = 'llama-3.3-70b-versatile';
 
 // ── Core Groq call (exported so components can use directly) ──
+import { apiPost } from './api';
+
 export async function groqChat(sys, usr, max, temp) {
-  var r = await fetch(GROQ_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + GROQ_KEY },
-    body: JSON.stringify({
-      model: GROQ_MODEL,
-      max_tokens: max || 1000,
-      temperature: temp || 0.7,
-      messages: [{ role: 'system', content: sys }, { role: 'user', content: usr }]
-    })
+  // Route through backend — API key stays on server
+  var data = await apiPost('/ai/chat', {
+    messages: sys
+      ? [{ role: 'system', content: sys }, { role: 'user', content: usr }]
+      : [{ role: 'user', content: usr }],
+    max_tokens: max || 1000,
+    temperature: temp || 0.7,
   });
-  var d = await r.json();
-  if (!r.ok) throw new Error((d.error && d.error.message) || ('Groq error ' + r.status));
-  return ((d.choices[0] && d.choices[0].message && d.choices[0].message.content) || '').trim();
+  if (data.error) throw new Error(data.error.message || 'AI error');
+  return data.choices[0].message.content;
 }
 
 // ── JSON parser ───────────────────────────────────────────────
@@ -187,19 +183,36 @@ export async function analyzeExamResult(questions, answers) {
     var log = questions.map(function(q, i) {
       var a = answers.find(function(x) { return x.question_id === q.question_id; });
       var correct = a && a.answer_text === q.correct_answer;
-      return 'Q' + (i + 1) + ' [' + (q.difficulty || 'Medium') + ']: ' + q.question_text.slice(0, 60) + ' | ' + (correct ? 'Correct' : 'Wrong');
+      return 'Q' + (i + 1) + ' [' + (q.difficulty || 'Medium') + ']: ' + q.question_text.slice(0, 80) + ' | ' + (correct ? 'Correct' : 'Wrong');
     }).join('; ');
     var sys = 'You are an academic tutor. Return ONLY valid JSON.';
     var usr = 'Analyze exam performance: ' + log +
       '. Return: {"level":"Beginner/Intermediate/Advanced","readiness":"Not Ready/Almost Ready/Ready",' +
       '"summary":"2-3 sentences","strengths":["s1","s2"],"weaknesses":["w1","w2"],' +
-      '"improvements":["tip1","tip2","tip3"],"focus_topics":["topic1","topic2"]}';
-    var raw = await groqChat(sys, usr, 600, 0.5);
+      '"improvements":["tip1","tip2","tip3"],"focus_topics":["topic1","topic2"],' +
+      '"youtube_topics":["specific youtube search for weak area 1","specific youtube search for weak area 2","specific youtube search for weak area 3"]}';
+    var raw = await groqChat(sys, usr, 700, 0.5);
     return parseJSON(raw);
   } catch (e) {
-    return { level: 'Intermediate', readiness: 'Almost Ready', summary: 'Review your incorrect answers carefully.', strengths: [], weaknesses: [], improvements: [], focus_topics: [] };
+    return { level: 'Intermediate', readiness: 'Almost Ready', summary: 'Review your incorrect answers carefully.', strengths: [], weaknesses: [], improvements: [], focus_topics: [], youtube_topics: [] };
   }
 }
+
+// ── YouTube resource recommendations based on weaknesses ──────
+export async function getYouTubeResources(weakTopics, subject) {
+  try {
+    var sys = 'You are a study advisor. Return ONLY a valid JSON array, no markdown.';
+    var usr = 'A student is weak in: ' + weakTopics.join(', ') +
+      (subject ? ' (subject: ' + subject + ')' : '') +
+      '. Give 4 specific YouTube search queries to find the best educational videos.' +
+      ' Each query should be specific (e.g. "binary search tree insertion tutorial" not "trees").' +
+      ' Return: [{"title":"friendly label","query":"exact search query","topic":"which weakness this fixes"}]';
+    var raw = await groqChat(sys, usr, 400, 0.6);
+    var arr = parseJSON(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch(e) { return []; }
+}
+
 
 // ── Evaluate short/descriptive answers ───────────────────────
 export async function evaluateShortAnswer(opts) {

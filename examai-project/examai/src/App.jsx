@@ -23,6 +23,7 @@ var adminNav = [
   { key: 'dashboard', label: '📊 Dashboard' },
   { key: 'exams',     label: '📝 Exams' },
   { key: 'create',    label: '+ Create' },
+  { key: 'courses',   label: '🏫 Courses' },
   { key: 'students',  label: '👥 Students' },
   { key: 'analytics', label: '📈 Analytics' },
   { key: 'announce',  label: '📢 Announce' },
@@ -32,6 +33,7 @@ var adminNav = [
 var studentNav = [
   { key: 'dashboard',      label: '🏠 Dashboard' },
   { key: 'exams',          label: '📝 Take Exam' },
+  { key: 'mycourses',      label: '🏫 Courses' },
   { key: 'leaderboard',    label: '🏆 Leaderboard' },
   { key: 'results',        label: '📊 My Results' },
   { key: 'practice',       label: '🎯 Practice' },
