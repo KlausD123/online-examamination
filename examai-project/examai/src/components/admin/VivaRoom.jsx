@@ -1267,13 +1267,23 @@ export default function VivaRoom() {
 
           {/* Live Jitsi video */}
           <div className="card" style={{ padding: 10 }}>
-            <div style={{ fontSize:'0.65rem', fontWeight:700, color:'#9ca3af', letterSpacing:1, marginBottom:8, textAlign:'center', fontFamily:'JetBrains Mono,monospace' }}>
-              📹 LIVE SESSION
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
+              <div style={{ fontSize:'0.65rem', fontWeight:700, color:'#9ca3af', letterSpacing:1, fontFamily:'JetBrains Mono,monospace' }}>
+                📹 STUDENT VIDEO
+              </div>
+              <div style={{ fontSize:'0.62rem', color: studentConnected ? '#4ade80' : '#6b7280', fontWeight:700 }}>
+                {studentConnected ? '🟢 Student Connected' : '⏳ Waiting for student…'}
+              </div>
             </div>
             {vivaId
               ? <JitsiMeet roomName={vivaId} displayName={store.currentUser ? (store.currentUser.name || "Examiner") : "Examiner"} height={280} role="admin"/>
               : <div style={{ height:200, display:'flex', alignItems:'center', justifyContent:'center', color:'#6b7280', fontSize:'0.85rem' }}>Video loading…</div>
             }
+            {!studentConnected && (
+              <div style={{ marginTop:8, padding:'6px 10px', background:'rgba(255,255,255,.04)', borderRadius:6, fontSize:'0.72rem', color:'#6b7280', textAlign:'center' }}>
+                Student will appear here once they join the room
+              </div>
+            )}
           </div>
 
           <div className="card" style={{ padding: 12 }}>
@@ -1427,9 +1437,6 @@ export default function VivaRoom() {
                     ? <span>{capturedText}{liveWords && <span style={{ color: '#9ca3af', fontStyle: 'italic' }}> {liveWords}</span>}</span>
                     : <span style={{ color: '#374151', fontStyle: 'italic' }}>{flow === 'listening' ? '🎤 Listening — student should speak now…' : 'Waiting…'}</span>}
                 </div>
-                <textarea className="form-textarea" rows={2} value={manualText} onChange={function(e) { setManualText(e.target.value); }}
-                  placeholder="Or type / correct the captured transcript…"
-                  style={{ fontSize: '0.84rem', background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.07)', color: '#e5e5e5' }}/>
               </div>
 
               <div style={{ marginBottom: 10 }}>
