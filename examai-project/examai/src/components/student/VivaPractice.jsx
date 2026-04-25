@@ -185,8 +185,21 @@ export default function VivaPractice() {
     utt.onend = function() { clearTimeout(fallback); finish(); };
   }
 
-  function startListening() {
-    if (!SR) { setRecording(false); recordingRef.current = false; return; }
+  async function startListening() {
+    if (!SR) {
+      setRecording(false); recordingRef.current = false;
+      store.addToast('Speech recognition not supported. Please use Chrome.', 'error');
+      return;
+    }
+    // Request mic permission first
+    try {
+      await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch(micErr) {
+      store.addToast('Microphone access denied — please allow mic and try again', 'error');
+      setRecording(false); recordingRef.current = false;
+      return;
+    }
+
     if (recRef.current) { try { recRef.current.abort(); } catch(e){} recRef.current = null; }
     clearTimeout(silenceTimer.current);
     liveTextRef.current = '';

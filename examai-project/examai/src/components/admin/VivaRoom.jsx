@@ -84,6 +84,7 @@ export default function VivaRoom() {
   var [vivaCourses,  setVivaCourses]  = useState([]);
   var [topic,       setTopic]       = useState('');
   var savedVivaRef  = useRef(null);
+  var [vivaIdState, setVivaIdState] = useState(null); // triggers re-render for Jitsi
 
   // ====================================================
   var _didRestore = useRef(false);
@@ -93,6 +94,7 @@ export default function VivaRoom() {
     var s = restoreSession();
     if (!s || !s.viva_id) return;
     savedVivaRef.current = { viva_id: s.viva_id, title: s.title, topic: s.topic };
+    setVivaIdState(s.viva_id);
     setTitle(s.title || '');
     setTopic(s.topic || '');
     if (s.questions)   { setQuestions(s.questions);   questionsRef.current = s.questions; }
@@ -824,6 +826,7 @@ export default function VivaRoom() {
       }
       var vivaData = { viva_id: r.viva_id, title, topic };
       savedVivaRef.current = vivaData;
+      setVivaIdState(vivaData.viva_id);
       sessionStorage.setItem(SESSION_KEY, JSON.stringify(vivaData));
       setPhase('room');
       setTimeout(setupWebRTC, 300);
@@ -1145,23 +1148,36 @@ export default function VivaRoom() {
           <button className="btn btn-outline" onClick={function() { setPhase('results'); }}>← Review</button>
           <button className="btn btn-primary" onClick={resetForNextStudent}>👤 Next Student (Keep Room)</button>
           <button className="btn btn-outline" onClick={function(){
-              // Generate CSV from current results state
-              if (!results) { alert('No results to export yet'); return; }
-              var rows = [['Student','Score (%)','Grade','Correct','Total Qs','Session']];
-              rows.push([
-                results.student_name || (studentRef && studentRef.current && studentRef.current.name) || 'Student',
-                results.total_score || 0,
-                results.grade || 'F',
-                results.correct_count || 0,
-                results.total_questions || 0,
-                title || 'Viva'
-              ]);
-              var csv = rows.map(function(r){ return r.join(','); }).join('\n');
+              // Build CSV from transcript
+              var rows = ['Q,Question,Student Answer,Verdict,Score (%)'];
+              (transcript||[]).forEach(function(t, i){
+                var row = [
+                  i+1,
+                  '"'+(t.question||'').replace(/"/g,"'").slice(0,100)+'"',
+                  '"'+(t.student_said||'').replace(/"/g,"'").slice(0,200)+'"',
+                  t.verdict ? (t.verdict.verdict||'') : '',
+                  t.verdict ? (t.verdict.score_pct||0) : ''
+                ].join(',');
+                rows.push(row);
+              });
+              if (results) {
+                rows.push('');
+                rows.push('SUMMARY');
+                rows.push('Student,'+(results.student_name||'Unknown'));
+                rows.push('Score %,'+( results.total_score||0));
+                rows.push('Grade,'+(results.grade||'F'));
+                rows.push('Correct,'+(results.correct_count||0)+'/'+( results.total_questions||0));
+              }
+              var csv = rows.join('\n');
               var blob = new Blob([csv], { type: 'text/csv' });
               var url = URL.createObjectURL(blob);
               var a = document.createElement('a');
-              a.href = url; a.download = (title||'viva').replace(/[^a-z0-9]/gi,'_') + '_result.csv';
-              a.click(); URL.revokeObjectURL(url);
+              a.href = url;
+              a.download = (title||'viva').replace(/[^a-z0-9]/gi,'_') + '_results.csv';
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
             }}>📥 Export CSV</button>
           <button className="btn btn-outline btn-sm" onClick={function(){
             var vivaId = savedVivaRef.current && savedVivaRef.current.viva_id;
@@ -1297,14 +1313,14 @@ export default function VivaRoom() {
         {/* LEFT: Jitsi video + question tools */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, overflow: 'auto' }}>
 
-          {/* Jitsi video */}
-          {savedVivaRef.current && (
+          {/* Jitsi video — uses state so React re-renders when room created */}
+          {vivaIdState && (
             <div className="card" style={{ padding: 8 }}>
               <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#9ca3af', letterSpacing: 1, marginBottom: 8, textAlign: 'center', fontFamily: 'JetBrains Mono,monospace' }}>📹 LIVE VIDEO</div>
               <JitsiMeet
-                roomName={savedVivaRef.current.viva_id}
-                displayName={'Examiner'}
-                height={280}
+                roomName={vivaIdState}
+                displayName="Examiner"
+                height={300}
               />
             </div>
           )}
