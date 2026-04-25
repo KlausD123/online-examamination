@@ -963,16 +963,18 @@ export default function VivaRoom() {
         <div className="card" style={{ textAlign: 'left' }}>
           <div className="form-group"><label className="form-label">Session Title *</label><input className="form-input" value={title} onChange={function(e) { setTitle(e.target.value); }} placeholder="e.g. CS Final Oral Viva"/></div>
           <div className="form-group"><label className="form-label">Topic / Subject</label><input className="form-input" value={topic} onChange={function(e) { setTopic(e.target.value); }} placeholder="e.g. Data Structures"/></div>
-          <div className="form-group">
-            <label className="form-label">Visibility</label>
-            <select className="form-select" value={vivaCourseId} onChange={function(e){ setVivaCourseId(e.target.value); }}>
-              <option value="">🌐 Global — all students can join</option>
-              {vivaCourses.map(function(c){ return <option key={c.course_id} value={c.course_id}>🏫 {c.name} — course only</option>; })}
-            </select>
-            <div style={{ fontSize:'0.75rem', color:'var(--text3)', marginTop:4 }}>
-              {vivaCourseId ? 'Only enrolled students in this course will be invited' : 'Any student can be invited'}
+          {vivaCourses.length > 0 && (
+            <div className="form-group">
+              <label className="form-label">Course (optional)</label>
+              <select className="form-select" value={vivaCourseId} onChange={function(e){ setVivaCourseId(e.target.value); }}>
+                <option value="">— No course (invite manually) —</option>
+                {vivaCourses.map(function(cr){ return <option key={cr.course_id} value={cr.course_id}>🏫 {cr.name}</option>; })}
+              </select>
+              <div style={{ fontSize:'0.75rem', color:'var(--text3)', marginTop:4 }}>
+                {vivaCourseId ? 'All enrolled students will be auto-invited' : 'You can invite students manually'}
+              </div>
             </div>
-          </div>
+          )}
           <button className="btn btn-primary btn-lg" style={{ width: '100%', justifyContent: 'center' }} onClick={handleStartRoom} disabled={loading || !title.trim()}>
             {loading ? 'Creating Room…' : '🚀 Create Viva Room'}
           </button>

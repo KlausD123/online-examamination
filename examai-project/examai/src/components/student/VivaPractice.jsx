@@ -200,6 +200,7 @@ export default function VivaPractice() {
     recordingRef.current = false;
     setRecording(false);
     setInterimText('');
+    setSpeaking(false);
     if (recRef.current) { try { recRef.current.stop(); } catch(e) {} recRef.current = null; }
   }
 
@@ -346,7 +347,9 @@ export default function VivaPractice() {
   function resetAll() {
     flowActive.current = false;
     clearTimeout(silenceTimer.current);
-    synthRef.current && synthRef.current.cancel();
+    // Stop TTS immediately
+    if (synthRef.current) { synthRef.current.cancel(); }
+    window.speechSynthesis && window.speechSynthesis.cancel();
     stopListening();
     clearVP();
     setPhaseRaw('setup'); setTopic(''); setTopicInfo(''); setQuestions([]); setQIndex(0);
@@ -504,12 +507,12 @@ export default function VivaPractice() {
                 {interimText && <span style={{ color: 'var(--text3)', fontStyle: 'italic' }}> {interimText}</span>}
               </div>
 
-              {/* Type fallback */}
-              {!recording && !speaking && !grading && (
+              {/* Type fallback — only show if speech recognition not supported or no answer after 3s */}
+              {!recording && !speaking && !grading && !flowActive.current && (
                 <div style={{ marginTop: 8 }}>
-                  <textarea className="form-textarea" rows={2} value={liveText} onChange={function(e){setLiveText(e.target.value); liveTextRef.current=e.target.value;}} placeholder="Or type your answer here…" style={{ fontSize: '0.88rem' }}/>
+                  <textarea className="form-textarea" rows={2} value={liveText} onChange={function(e){setLiveText(e.target.value); liveTextRef.current=e.target.value;}} placeholder="Type your answer here…" style={{ fontSize: '0.88rem' }}/>
                   {liveText.trim() && !verdict && (
-                    <button className="btn btn-warning btn-sm" style={{ marginTop: 6 }} onClick={function(){stopListeningAndGrade();}} disabled={grading}>⚡ Grade Typed Answer</button>
+                    <button className="btn btn-warning btn-sm" style={{ marginTop: 6 }} onClick={function(){stopListeningAndGrade();}} disabled={grading}>⚡ Submit Answer</button>
                   )}
                 </div>
               )}

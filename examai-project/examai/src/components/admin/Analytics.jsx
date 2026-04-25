@@ -12,12 +12,16 @@ export default function Analytics() {
   var [loading, setLoading] = useState(true);
   var [tab,     setTab]     = useState('overview');
   var [selExamTab, setSelExamTab] = useState(null);          // overview | exams | students
-  var [selExam, setSelExam] = useState(null);               // exam_id filter for student tab
+  var [selExam, setSelExam] = useState(null);
+  var [vivaResults, setVivaResults] = useState(null);               // exam_id filter for student tab
 
   useEffect(function() {
     store.loadAnalytics()
       .then(function(d) { setStats(d); setLoading(false); })
       .catch(function() { setLoading(false); });
+    // Load viva results separately
+    var { apiGet } = require('../../utils/api');
+    apiGet('/viva/all-results').then(function(d){ setVivaResults(d||[]); }).catch(function(){});
   }, []); // eslint-disable-line
 
   if (loading) return <div className="loading-center"><div className="spinner"></div><span>Loading analytics…</span></div>;
@@ -28,8 +32,8 @@ export default function Analytics() {
   // Group student_exam_detail by exam for exam-wise view
   var detail = stats.student_exam_detail || [];
 
-  // Exams list from submissions array (has avg_score, violation_count, passed_count)
-  var examList = stats.submissions || [];
+  // Exams list from submissions array — only show exams with submissions
+  var examList = (stats.submissions || []).filter(function(e){ return (e.submission_count||0) > 0; });
 
   // All unique exams for filter
   var examOptions = examList.map(function(e) { return { id: e.exam_id, title: e.title }; });
@@ -83,6 +87,7 @@ export default function Analytics() {
         {[
           { k:'overview', l:'📊 Overview' },
           { k:'exams',    l:'📝 Exam-wise Analysis' },
+          { k:'viva',     l:'🎙 Viva Results' },
           { k:'conduct',  l:'🚫 Misconduct' },
         ].map(function(t) {
           return <button key={t.k} className={'tab-btn'+(tab===t.k?' active':'')} onClick={function(){setTab(t.k);}}>{t.l}</button>;
@@ -295,6 +300,54 @@ export default function Analytics() {
       {/* ══════════════════════════════════════════════════════
           TAB: MISCONDUCT
          ══════════════════════════════════════════════════════ */}
+      {tab === 'viva' && (
+        <div>
+          {!vivaResults
+            ? <div className="loading-center"><div className="spinner"/></div>
+            : vivaResults.length === 0
+            ? <div className="empty-state"><div className="empty-state-icon">🎙</div><div className="empty-state-title">No viva results yet</div></div>
+            : <div className="card">
+              <div style={{ fontWeight:700, marginBottom:16, fontSize:'1.05rem' }}>🎙 Viva Results — All Students</div>
+              <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.85rem' }}>
+                <thead><tr style={{ borderBottom:'2px solid var(--border)' }}>
+                  <th style={{ textAlign:'left', padding:'8px', color:'var(--text3)' }}>Student</th>
+                  <th style={{ textAlign:'left', padding:'8px', color:'var(--text3)' }}>Session</th>
+                  <th style={{ textAlign:'center', padding:'8px', color:'var(--text3)' }}>Score</th>
+                  <th style={{ textAlign:'center', padding:'8px', color:'var(--text3)' }}>Grade</th>
+                  <th style={{ textAlign:'center', padding:'8px', color:'var(--text3)' }}>Correct</th>
+                  <th style={{ textAlign:'center', padding:'8px', color:'var(--text3)' }}>Visible</th>
+                  <th style={{ textAlign:'left', padding:'8px', color:'var(--text3)' }}>Date</th>
+                </tr></thead>
+                <tbody>
+                  {vivaResults.map(function(r, i) {
+                    var sg = r.grade==='A+'||r.grade==='A'?'#16a34a':r.grade==='B'?'#2563eb':r.grade==='C'?'#d97706':'#dc2626';
+                    return (
+                      <tr key={i} style={{ borderBottom:'1px solid var(--border)' }}>
+                        <td style={{ padding:'10px 8px' }}>
+                          <div style={{ fontWeight:600 }}>{r.student_name||'Unknown'}</div>
+                          <div style={{ fontSize:'0.73rem', color:'var(--text3)' }}>{r.student_email||''}</div>
+                        </td>
+                        <td style={{ padding:'10px 8px' }}>
+                          <div style={{ fontWeight:500 }}>{r.title}</div>
+                          <div style={{ fontSize:'0.73rem', color:'var(--text3)' }}>{r.topic||''}</div>
+                        </td>
+                        <td style={{ padding:'10px 8px', textAlign:'center', fontWeight:700, fontFamily:'JetBrains Mono,monospace' }}>{r.total_score||0}%</td>
+                        <td style={{ padding:'10px 8px', textAlign:'center', fontWeight:800, fontSize:'1rem', color:sg }}>{r.grade||'-'}</td>
+                        <td style={{ padding:'10px 8px', textAlign:'center', color:'var(--text3)' }}>{r.correct_count||0}/{r.total_questions||0}</td>
+                        <td style={{ padding:'10px 8px', textAlign:'center' }}>
+                          <span className={'badge badge-'+(r.result_visible?'success':'warning')}>{r.result_visible?'Visible':'Hidden'}</span>
+                        </td>
+                        <td style={{ padding:'10px 8px', color:'var(--text3)', fontSize:'0.78rem' }}>{new Date(r.created_at).toLocaleDateString()}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          }
+        </div>
+      )}
+
       {tab === 'conduct' && (
         <div>
           <div style={{ padding:'12px 16px', background:'rgba(220,38,38,.06)', border:'1px solid rgba(220,38,38,.2)', borderRadius:8, marginBottom:20, fontSize:'0.85rem', color:'var(--danger)', display:'flex', alignItems:'center', gap:10 }}>
