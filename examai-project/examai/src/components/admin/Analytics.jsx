@@ -259,7 +259,7 @@ export default function Analytics() {
       {/* ══════════════════════════════════════════════════════
           TAB: STUDENT PERFORMANCE
          ══════════════════════════════════════════════════════ */}
-      {tab === 'students' && (
+      {tab === 'students_removed' && (
         <div>
           {/* Filter by exam */}
           <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:18 }}>
