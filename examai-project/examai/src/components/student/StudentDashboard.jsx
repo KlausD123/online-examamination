@@ -3,14 +3,14 @@ import { useStore } from '../../store/useStore';
 
 export default function StudentDashboard({ navigate }) {
   var store = useStore();
-  var [exams, setExams] = useState([]);
-  var [subs, setSubs] = useState([]);
-  var [notifs, setNotifs] = useState([]);
+  var [exams,  setExams]  = useState(store.exams || []);
+  var [subs,   setSubs]   = useState(store.submissions || []);
+  var [notifs, setNotifs] = useState(store.notifications || []);
 
   useEffect(function() {
-    store.loadExams().then(function(d) { setExams(d); });
-    store.loadSubmissions(store.currentUser.user_id).then(function(d) { setSubs(d); });
-    store.loadNotifications().then(function(d) { setNotifs(d); });
+    store.loadExams().then(function(d) { setExams(d||[]); });
+    store.loadSubmissions(store.currentUser.user_id).then(function(d) { setSubs(d||[]); });
+    store.loadNotifications().then(function(d) { setNotifs(d||[]); });
   }, []); // eslint-disable-line
 
   var recentSubs = subs.slice(0, 3);

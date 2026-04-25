@@ -547,12 +547,14 @@ export default function VivaRoom() {
         setFlow('listening'); flowRef.current = 'listening';
         capturedRef.current = ''; setCapturedText(''); setLiveWords('');
         startSTT();
-      }, 600);
+      }, 1000); // Wait 1s after TTS ends before listening
     };
     utt.onerror = function() {
-      setFlow('listening'); flowRef.current = 'listening';
-      capturedRef.current = ''; setCapturedText('');
-      startSTT();
+      setTimeout(function() {
+        setFlow('listening'); flowRef.current = 'listening';
+        capturedRef.current = ''; setCapturedText('');
+        startSTT();
+      }, 500);
     };
     synthRef.current.speak(utt);
   }
@@ -803,6 +805,22 @@ export default function VivaRoom() {
     setLoading(true);
     try {
       var r = await apiPost('/viva', { title, topic, questions: [], course_id: vivaCourseId || null });
+      // If course selected, auto-invite all enrolled students
+      if (vivaCourseId) {
+        try {
+          var members = await apiGet('/courses/' + vivaCourseId + '/members');
+          var vid = r.viva_id;
+          for (var mi = 0; mi < (members||[]).length; mi++) {
+            var m = members[mi];
+            await apiPost('/notifications', {
+              title: 'Viva Invitation — ' + title,
+              message: 'Invited to join viva "' + title + '". Room: ' + vid,
+              type: 'info', recipient_id: m.user_id, viva_room_id: vid
+            }).catch(function(){});
+          }
+          store.addToast('Invited ' + (members||[]).length + ' course students', 'success');
+        } catch(invErr) { console.warn('Auto-invite failed:', invErr); }
+      }
       var vivaData = { viva_id: r.viva_id, title, topic };
       savedVivaRef.current = vivaData;
       sessionStorage.setItem(SESSION_KEY, JSON.stringify(vivaData));

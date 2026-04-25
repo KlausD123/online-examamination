@@ -115,13 +115,13 @@ export default function VivaPractice() {
     setSpeaking(true);
     var utt = new SpeechSynthesisUtterance(text);
     utt.rate = 0.88; utt.pitch = 1.0;
-    utt.onend = function() { setSpeaking(false); if (onDone) onDone(); };
-    utt.onerror = function() { setSpeaking(false); if (onDone) onDone(); };
+    utt.onend = function() { setSpeaking(false); setTimeout(function() { if (onDone) onDone(); }, 800); };
+    utt.onerror = function() { setSpeaking(false); setTimeout(function() { if (onDone) onDone(); }, 500); };
     synthRef.current.speak(utt);
   }
 
   function startListening() {
-    if (!SR) return;
+    if (!SR) { console.warn('No speech recognition'); return; }
     liveTextRef.current = '';
     setLiveText('');
     setInterimText('');

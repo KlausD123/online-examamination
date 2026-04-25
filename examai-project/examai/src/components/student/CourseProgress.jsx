@@ -5,14 +5,18 @@ export default function CourseProgress() {
   var [courses, setCourses] = useState([]);
   var [selected, setSelected] = useState(null);
   var [exams, setExams] = useState([]);
+  var [subs, setSubs] = useState([]);
   var [loading, setLoading] = useState(true);
+  var store = require('../../store/useStore').useStore();
 
   useEffect(function() {
-    Promise.all([apiGet('/courses/my'), apiGet('/exams')]).then(function(r) {
+    Promise.all([apiGet('/courses/my'), apiGet('/exams'), store.currentUser ? store.loadSubmissions(store.currentUser.user_id) : Promise.resolve([])]).then(function(r) {
       var myCourses = r[0]||[];
       var allExams = r[1]||[];
+      var mySubmissions = r[2]||[];
       setCourses(myCourses);
       setExams(allExams);
+      setSubs(mySubmissions);
       setLoading(false);
       if (myCourses.length > 0) setSelected(myCourses[0]);
     }).catch(function(){ setLoading(false); });
@@ -71,22 +75,43 @@ export default function CourseProgress() {
                       </div>
 
                       <div className="card">
-                        <div style={{ fontWeight:700, marginBottom:12 }}>📝 Course Exams</div>
+                        <div style={{ fontWeight:700, marginBottom:12 }}>📝 Course Exams & My Performance</div>
                         {courseExams.map(function(e) {
                           var now = new Date();
                           var isLive = e.status==='published' && (!e.scheduled_at || new Date(e.scheduled_at)<=now) && (!e.end_at || new Date(e.end_at)>=now);
+                          // Find my submission for this exam
+                          var mySub = subs.find(function(s){ return s.exam_id === e.exam_id; });
+                          var gc = mySub ? (mySub.grade==='A+'||mySub.grade==='A'?'#16a34a':mySub.grade==='B'?'#2563eb':mySub.grade==='C'?'#d97706':'#dc2626') : null;
                           return (
-                            <div key={e.exam_id} style={{ padding:'12px 14px', borderRadius:10, marginBottom:10, border:'1px solid var(--border)', background:'var(--surface)' }}>
+                            <div key={e.exam_id} style={{ padding:'14px 16px', borderRadius:10, marginBottom:10, border:'1px solid var(--border)', background:'var(--surface)', borderLeft: mySub ? '4px solid ' + gc : '4px solid var(--border)' }}>
                               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
-                                <div>
+                                <div style={{ flex:1 }}>
                                   <div style={{ fontWeight:700, marginBottom:4 }}>{e.title}</div>
-                                  <div style={{ fontSize:'0.78rem', color:'var(--text3)' }}>⏱ {e.duration_minutes} min · 📊 {e.total_marks} marks</div>
-                                  {e.scheduled_at && <div style={{ fontSize:'0.75rem', color:'var(--text3)', marginTop:3 }}>📅 {new Date(e.scheduled_at).toLocaleString()}</div>}
+                                  <div style={{ fontSize:'0.78rem', color:'var(--text3)', marginBottom:6 }}>⏱ {e.duration_minutes} min · 📊 {e.total_marks} marks</div>
+                                  {mySub ? (
+                                    <div style={{ display:'flex', gap:12, flexWrap:'wrap', fontSize:'0.8rem' }}>
+                                      <span style={{ color:'#16a34a', fontWeight:600 }}>✅ {mySub.correct_count||0} correct</span>
+                                      <span style={{ color:'#dc2626', fontWeight:600 }}>❌ {(mySub.total_questions||0)-(mySub.correct_count||0)} wrong</span>
+                                      <span style={{ color:'var(--text3)' }}>Score: {mySub.total_score||0}%</span>
+                                    </div>
+                                  ) : (
+                                    <span style={{ fontSize:'0.78rem', color:'var(--text3)' }}>{isLive?'🟢 Available now':'⏳ Not attempted'}</span>
+                                  )}
                                 </div>
-                                <span className={'badge badge-'+(isLive?'success':e.status==='draft'?'warning':'info')}>
-                                  {isLive?'🟢 Live':e.status==='draft'?'Draft':'Upcoming'}
-                                </span>
+                                {mySub ? (
+                                  <div style={{ textAlign:'center', marginLeft:12 }}>
+                                    <div style={{ fontWeight:800, fontSize:'1.5rem', color:gc }}>{mySub.grade||'-'}</div>
+                                    <div style={{ fontSize:'0.72rem', color:'var(--text3)' }}>{mySub.total_score||0}%</div>
+                                  </div>
+                                ) : (
+                                  <span className={'badge badge-'+(isLive?'success':'info')}>{isLive?'🟢 Live':'Upcoming'}</span>
+                                )}
                               </div>
+                              {mySub && mySub.total_questions > 0 && (
+                                <div style={{ marginTop:8, height:5, background:'var(--surface3)', borderRadius:3, overflow:'hidden' }}>
+                                  <div style={{ height:'100%', width:((mySub.correct_count||0)/mySub.total_questions*100)+'%', background:'#16a34a', borderRadius:3 }}/>
+                                </div>
+                              )}
                             </div>
                           );
                         })}

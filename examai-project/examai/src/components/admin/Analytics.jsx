@@ -10,7 +10,8 @@ export default function Analytics() {
   var store   = useStore();
   var [stats,   setStats]   = useState(null);
   var [loading, setLoading] = useState(true);
-  var [tab,     setTab]     = useState('overview');          // overview | exams | students
+  var [tab,     setTab]     = useState('overview');
+  var [selExamTab, setSelExamTab] = useState(null);          // overview | exams | students
   var [selExam, setSelExam] = useState(null);               // exam_id filter for student tab
 
   useEffect(function() {
@@ -149,7 +150,21 @@ export default function Analytics() {
         <div>
           {examList.length === 0
             ? <div className="empty-state"><div className="empty-state-title">No exams with submissions yet</div></div>
-            : examList.map(function(exam) {
+            : <div>
+              {/* Horizontal exam tabs */}
+              <div style={{ display:'flex', gap:8, overflowX:'auto', paddingBottom:4, marginBottom:20, scrollbarWidth:'none' }}>
+                {examList.map(function(e) {
+                  var isSel = (selExamTab||examList[0]).exam_id === e.exam_id;
+                  return (
+                    <button key={e.exam_id} onClick={function(){setSelExamTab(e);}}
+                      style={{ padding:'8px 16px', borderRadius:20, border:'2px solid '+(isSel?'var(--accent)':'var(--border)'), background:isSel?'var(--accent-glow)':'var(--surface)', color:isSel?'var(--accent)':'var(--text3)', fontWeight:isSel?700:400, whiteSpace:'nowrap', cursor:'pointer', fontSize:'0.85rem', flexShrink:0 }}>
+                      {e.title}
+                    </button>
+                  );
+                })}
+              </div>
+              {/* Show selected exam */}
+              {[selExamTab||examList[0]].map(function(exam) {
               var passRate = exam.submission_count > 0
                 ? Math.round((exam.passed_count / exam.submission_count) * 100) : 0;
               var avgPct = exam.total_marks > 0
