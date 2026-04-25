@@ -1226,23 +1226,12 @@ export default function VivaRoom() {
         </div>
       )}
 
-      {/* Student being examined selector */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, padding: '7px 12px', background: 'rgba(255,255,255,.04)', borderRadius: 8, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: '0.72rem', color: '#9ca3af', fontFamily: 'JetBrains Mono,monospace', whiteSpace: 'nowrap' }}>👤 EXAMINING:</span>
-        {students.length > 0
-          ? <select style={{ flex: 1, minWidth: 160, padding: '4px 8px', borderRadius: 6, border: '1px solid rgba(255,255,255,.15)', background: 'rgba(255,255,255,.07)', color: '#e5e5e5', fontSize: '0.82rem' }}
-              value={selStudentId || ''}
-              onChange={function(e) {
-                var sid = e.target.value;
-                var s = students.find(function(x) { return String(x.user_id) === String(sid); });
-                setSelStudentId(sid ? Number(sid) : null);
-                setSelStudentName(s ? s.name : '');
-              }}>
-              <option value="">— Select student —</option>
-              {students.map(function(s) { return <option key={s.user_id} value={s.user_id}>{s.name} ({s.email})</option>; })}
-            </select>
-          : <button className="btn btn-sm btn-outline" style={{ fontSize: '0.72rem' }} onClick={function() { loadStudents(); }}>Load Students</button>}
-        {selStudentName && <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#a78bfa' }}>{selStudentName}</span>}
+      {/* Student name input */}
+      <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8, padding:'7px 12px', background:'rgba(255,255,255,.04)', borderRadius:8, flexWrap:'wrap' }}>
+        <span style={{ fontSize:'0.72rem', color:'#9ca3af', fontFamily:'JetBrains Mono,monospace', whiteSpace:'nowrap' }}>👤 STUDENT:</span>
+        <input style={{ flex:1, minWidth:160, padding:'4px 8px', borderRadius:6, border:'1px solid rgba(255,255,255,.15)', background:'rgba(255,255,255,.07)', color:'#e5e5e5', fontSize:'0.82rem' }}
+          value={selStudentName} onChange={function(e){ setSelStudentName(e.target.value); }}
+          placeholder="Type student name…"/>
       </div>
 
       {showInvite && (
