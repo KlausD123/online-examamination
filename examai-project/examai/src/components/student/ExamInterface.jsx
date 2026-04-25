@@ -4,7 +4,7 @@ import { apiPost } from '../../utils/api';
 
 // ── Groq Vision proctoring ───────────────────────────────────────────────────
 
-var GROQ_VISION_KEY = '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';
+var GROQ_VISION_KEY = process.env.REACT_APP_GROQ_KEY || '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';
 
 async function checkFrameWithGroq(videoEl) {
   try {
