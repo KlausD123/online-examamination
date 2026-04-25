@@ -1271,7 +1271,7 @@ export default function VivaRoom() {
               📹 LIVE SESSION
             </div>
             {vivaId
-              ? <JitsiMeet roomName={vivaId} displayName={store.currentUser ? (store.currentUser.name || 'Examiner') : 'Examiner'} height={280}/>
+              ? <JitsiMeet roomName={vivaId} displayName={store.currentUser ? (store.currentUser.name || "Examiner") : "Examiner"} height={280} role="admin"/>
               : <div style={{ height:200, display:'flex', alignItems:'center', justifyContent:'center', color:'#6b7280', fontSize:'0.85rem' }}>Video loading…</div>
             }
           </div>

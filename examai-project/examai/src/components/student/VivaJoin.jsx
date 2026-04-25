@@ -218,7 +218,7 @@ export default function VivaJoin() {
             <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#9ca3af', letterSpacing: 1, marginBottom: 8, textAlign: 'center', fontFamily: 'JetBrains Mono,monospace' }}>
               📹 LIVE SESSION
             </div>
-            <JitsiMeet roomName={roomId} displayName={studentName} height={300} />
+            <JitsiMeet roomName={roomId} displayName={studentName} height={300} role="student" />
           </div>
 
           <div className="card" style={{ padding: 12, marginTop: 10 }}>

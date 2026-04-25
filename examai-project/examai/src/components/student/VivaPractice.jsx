@@ -165,7 +165,7 @@ export default function VivaPractice() {
 
   function speakText(text, onDone) {
     if (!synthRef.current || !text) {
-      setTimeout(function() { if (onDone) onDone(); }, 300);
+      setTimeout(function() { if (flowActive.current && onDone) onDone(); }, 300);
       return;
     }
     synthRef.current.cancel();
@@ -174,16 +174,17 @@ export default function VivaPractice() {
     function finish() {
       if (done) return; done = true;
       setSpeaking(false);
-      setTimeout(function() { if (onDone) onDone(); }, 800);
+      // Only call onDone if session is still active
+      if (flowActive.current && onDone) {
+        setTimeout(function() { onDone(); }, 600);
+      }
     }
     var utt = new SpeechSynthesisUtterance(text);
     utt.rate = 0.88; utt.pitch = 1.0; utt.lang = 'en-US';
-    utt.onend   = finish;
-    utt.onerror = finish;
-    synthRef.current.speak(utt);
-    // Fallback: if onend never fires (browser bug), auto-proceed
     var fallback = setTimeout(function() { finish(); }, (text.length * 80) + 3000);
     utt.onend = function() { clearTimeout(fallback); finish(); };
+    utt.onerror = function() { clearTimeout(fallback); finish(); };
+    synthRef.current.speak(utt);
   }
 
   async function startListening() {
@@ -193,26 +194,32 @@ export default function VivaPractice() {
     setRecording(true); recordingRef.current = true;
     recordingStartTime.current = Date.now();
 
-    // Try Web Speech API first (Chrome/Edge)
     if (SR) {
       try { await navigator.mediaDevices.getUserMedia({ audio: true }); } catch(e) {}
       var r = new SR();
       r.continuous = true;
       r.interimResults = true;
       r.lang = 'en-US';
+      r.maxAlternatives = 1;
 
       r.onresult = function(e) {
+        if (!recordingRef.current) return;
         clearTimeout(silenceTimer.current);
-        var final = '', interim = '';
-        for (var i = 0; i < e.results.length; i++) {
-          if (e.results[i].isFinal) final += e.results[i][0].transcript + ' ';
+        var newFinal = '', interim = '';
+        // Use resultIndex so we only process NEW results, not re-accumulate old ones
+        for (var i = e.resultIndex; i < e.results.length; i++) {
+          if (e.results[i].isFinal) newFinal += e.results[i][0].transcript + ' ';
           else interim += e.results[i][0].transcript;
         }
-        if (final) { liveTextRef.current += final; setLiveText(liveTextRef.current.trim()); }
-        if (interim) setInterimText(interim);
+        if (newFinal) {
+          liveTextRef.current += newFinal;
+          setLiveText(liveTextRef.current.trim());
+        }
+        setInterimText(interim);
+        // Auto-grade after 4s silence
         silenceTimer.current = setTimeout(function() {
-          if (recordingRef.current) stopListeningAndGrade();
-        }, 3500);
+          if (recordingRef.current && flowActive.current) stopListeningAndGrade();
+        }, 4000);
       };
 
       r.onerror = function(ev) {
@@ -220,12 +227,16 @@ export default function VivaPractice() {
           setRecording(false); recordingRef.current = false;
           store.addToast('Mic denied — allow microphone in browser settings', 'error');
         }
+        // Ignore no-speech and aborted — SR will restart via onend
       };
 
       r.onend = function() {
+        // Only restart if we're still supposed to be recording
         if (recordingRef.current && flowActive.current) {
-          try { r.start(); } catch(e) {
-            // SR ended — grade what we have
+          try {
+            r.start();
+          } catch(e) {
+            // SR can't restart — grade whatever was captured
             if (liveTextRef.current.trim().length > 0) stopListeningAndGrade();
             else { setRecording(false); recordingRef.current = false; }
           }
@@ -235,7 +246,7 @@ export default function VivaPractice() {
       try { r.start(); recRef.current = r; return; } catch(e) { console.warn('SR start failed:', e); }
     }
 
-    // Fallback: show type box
+    // Fallback: type box
     setRecording(false); recordingRef.current = false;
     store.addToast('Voice not supported — please type your answer below', 'warning');
   }
@@ -280,25 +291,27 @@ export default function VivaPractice() {
     setTranscript(newT);
 
     // Speak feedback then move to next question
+    var isLast = qi >= qs.length - 1;
     var feedbackText = (v && v.verdict ? v.verdict + '. ' : '') + (v && v.feedback ? v.feedback : '');
-    speakText(feedbackText, function() {
-      var isLast = qi >= qs.length - 1;
-      if (isLast) {
-        flowActive.current = false;
-        endSession(newT);
-      } else {
-        // Next question
+
+    if (isLast) {
+      // Kill flow BEFORE speaking so onDone guard won't fire any next-question logic
+      flowActive.current = false;
+      speakText(feedbackText, null); // no onDone — session ends right after
+      endSession(newT);
+    } else {
+      speakText(feedbackText, function() {
+        if (!flowActive.current) return; // guard: End Session was clicked during feedback
         var nextIdx = qi + 1;
         qIndexRef.current = nextIdx;
         setQIndex(nextIdx);
         setLiveText(''); liveTextRef.current = '';
         setVerdict(null);
-        // Speak next question then start listening
         speakText(qs[nextIdx].question, function() {
           if (flowActive.current) startListening();
         });
-      }
-    });
+      });
+    }
   }
 
   // ====================================================
@@ -331,9 +344,14 @@ export default function VivaPractice() {
 
   // ====================================================
   async function endSession(finalTranscript) {
+    // Kill everything immediately — prevent any queued TTS or mic from firing
+    flowActive.current = false;
+    recordingRef.current = false;
+    clearTimeout(silenceTimer.current);
+    if (recRef.current) { try { recRef.current.abort(); } catch(e) {} recRef.current = null; }
     synthRef.current && synthRef.current.cancel();
     window.speechSynthesis && window.speechSynthesis.cancel();
-    stopRecording();
+    setRecording(false); setSpeaking(false); setInterimText('');
     setPhase('results');
     setAnalyzing(true);
 
