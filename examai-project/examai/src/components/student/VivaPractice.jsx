@@ -133,99 +133,51 @@ export default function VivaPractice() {
   }
 
   function startListening() {
-    if (!SR) {
-      // No SR — show type box for manual entry
-      setRecording(false);
-      recordingRef.current = false;
-      return;
-    }
-    // Stop any existing recognition
-    if (recRef.current) {
-      try { recRef.current.stop(); } catch(e) {}
-      recRef.current = null;
-    }
+    if (!SR) { setRecording(false); recordingRef.current = false; return; }
+    // Kill any existing
+    if (recRef.current) { try { recRef.current.abort(); } catch(e){} recRef.current = null; }
+    clearTimeout(silenceTimer.current);
+
     liveTextRef.current = '';
-    setLiveText('');
-    setInterimText('');
-    setRecording(true);
-    recordingRef.current = true;
+    setLiveText(''); setInterimText('');
+    setRecording(true); recordingRef.current = true;
 
     var rec = new SR();
-    rec.continuous = true;
+    rec.continuous = false;   // simpler: one utterance at a time
     rec.interimResults = true;
     rec.lang = 'en-US';
-    rec.maxAlternatives = 1;
-
-    // Reset silence timer every time speech is detected
-    // Trigger phrases that mean "I'm done"
-    var FINAL_PHRASES = [
-      'final answer', 'that is my answer', "that's my answer", 'my final answer',
-      'i am done', "i'm done", 'done', 'submit', 'that is all', "that's all",
-      'end answer', 'final', 'submit answer'
-    ];
 
     rec.onresult = function(e) {
       clearTimeout(silenceTimer.current);
-      var finalChunk = '', interim = '';
-      for (var i = e.resultIndex; i < e.results.length; i++) {
-        if (e.results[i].isFinal) finalChunk += e.results[i][0].transcript + ' ';
-        else interim += e.results[i][0].transcript;
+      var txt = '';
+      for (var i = 0; i < e.results.length; i++) {
+        txt += e.results[i][0].transcript;
       }
-      if (finalChunk) {
-        liveTextRef.current += finalChunk;
-        setLiveText(liveTextRef.current);
-        // Check if student said a final-answer phrase
-        var lower = finalChunk.toLowerCase().trim();
-        var saidFinal = FINAL_PHRASES.some(function(p) { return lower.includes(p); });
-        if (saidFinal) {
-          // Remove the trigger phrase from transcript
-          FINAL_PHRASES.forEach(function(p) {
-            liveTextRef.current = liveTextRef.current.replace(new RegExp(p, 'gi'), '').trim();
-          });
-          setLiveText(liveTextRef.current);
-          clearTimeout(silenceTimer.current);
-          setTimeout(function() { if (recordingRef.current) stopListeningAndGrade(); }, 300);
-          return;
-        }
-      }
-      setInterimText(interim);
-      // 4 seconds of silence → auto-grade
+      liveTextRef.current = txt;
+      setLiveText(txt);
+      setInterimText('');
+      // After 2s of no new speech, auto-grade
       silenceTimer.current = setTimeout(function() {
-        if (recordingRef.current && liveTextRef.current.trim().length > 5) {
-          stopListeningAndGrade();
-        }
-      }, 5000);
+        if (recordingRef.current) stopListeningAndGrade();
+      }, 2000);
     };
 
     rec.onerror = function(e) {
-      if (e.error === 'not-allowed') {
-        setRecording(false); recordingRef.current = false;
-        console.warn('Mic permission denied');
-        return;
+      if (e.error === 'not-allowed') { setRecording(false); recordingRef.current = false; return; }
+      // On other errors, restart after short delay
+      if (recordingRef.current && flowActive.current) {
+        setTimeout(function() { if (recordingRef.current) startListening(); }, 500);
       }
-      if (e.error !== 'no-speech') console.warn('STT error:', e.error);
     };
     rec.onend = function() {
-      if (recordingRef.current && flowActive.current) {
-        try {
-          var r2 = new SR();
-          r2.continuous = true; r2.interimResults = true;
-          r2.lang = 'en-US'; r2.maxAlternatives = 1;
-          r2.onresult = rec.onresult;
-          r2.onerror = rec.onerror;
-          r2.onend = rec.onend;
-          r2.start();
-          recRef.current = r2;
-        } catch(e2) { console.warn('STT restart failed:', e2); }
+      // If no result yet and still recording, restart to capture more
+      if (recordingRef.current && flowActive.current && liveTextRef.current.trim().length === 0) {
+        setTimeout(function() { if (recordingRef.current) startListening(); }, 200);
       }
+      // If we have text, silenceTimer will fire stopListeningAndGrade
     };
-    try {
-      rec.start();
-      recRef.current = rec;
-    } catch(startErr) {
-      console.warn('STT start failed:', startErr);
-      setRecording(false); recordingRef.current = false;
-    }
+    try { rec.start(); recRef.current = rec; }
+    catch(e2) { console.warn('STT start error:', e2); setRecording(false); recordingRef.current = false; }
   }
 
   function stopListening() {
@@ -320,25 +272,47 @@ export default function VivaPractice() {
   // ====================================================
   async function endSession(finalTranscript) {
     synthRef.current && synthRef.current.cancel();
+    window.speechSynthesis && window.speechSynthesis.cancel();
     stopRecording();
     setPhase('results');
     setAnalyzing(true);
 
-    var correct = (finalTranscript || transcript).filter(function(e) { return e.verdict && e.verdict.correct; }).length;
-    var total   = (finalTranscript || transcript).length;
-    var avgPct  = total > 0 ? Math.round((finalTranscript || transcript).reduce(function(a, e) { return a + (e.verdict ? (e.verdict.score_pct || 0) : 0); }, 0) / total) : 0;
-    var grade   = avgPct >= 90 ? 'A+' : avgPct >= 80 ? 'A' : avgPct >= 70 ? 'B' : avgPct >= 60 ? 'C' : avgPct >= 50 ? 'D' : 'F';
+    var tData = finalTranscript || transcript;
+    var answered = tData.filter(function(e){ return e.student_said && e.student_said.trim().length > 0; }).length;
+    var correct = tData.filter(function(e){ return e.verdict && e.verdict.correct; }).length;
+    var total   = tData.length;
+    var avgPct  = total > 0 ? Math.round(tData.reduce(function(a,e){ return a+(e.verdict?(e.verdict.score_pct||0):0); },0)/total) : 0;
+    var grade   = avgPct>=90?'A+':avgPct>=80?'A':avgPct>=70?'B':avgPct>=60?'C':avgPct>=50?'D':'F';
+
+    // No answers captured
+    if (answered === 0 || total === 0) {
+      var noAnsFallback = {
+        overall_feedback: 'No answers were recorded in this session. Microphone may not be working. Please check mic permissions in your browser and try again.',
+        strong_topics: [],
+        weak_topics: tData.slice(0,3).map(function(e){ return e.question.slice(0,60); }),
+        improvement_tips: ['Enable microphone in browser settings (site permissions)', 'Use Chrome or Edge for best speech recognition support', 'Speak clearly after the question finishes playing'],
+        predicted_exam_readiness: 'Not Ready'
+      };
+      setResults({ grade:'F', avgPct:0, correct:0, total:total, analysis:noAnsFallback, transcript:tData });
+      saveToLocalStorage(topic, total, 0, 0, 'F', noAnsFallback);
+      setAnalyzing(false);
+      return;
+    }
 
     try {
-      var sys = 'You are a viva examiner. Return ONLY valid JSON.';
-      var log = (finalTranscript || transcript).map(function(e, i) {
-        return 'Q' + (i+1) + ': ' + e.question + ' | Student: ' + (e.student_said || '(no answer)') + ' | ' + (e.verdict ? e.verdict.verdict : 'Not graded');
-      }).join('; ');
-      var usr = 'Analyze this viva practice session on "' + topic + '":\n' + log +
-        '\nReturn ONLY valid JSON with this exact structure:\n{"overall_feedback":"3-4 sentences about performance","strong_topics":["specific topic student knew well","another strength"],"weak_topics":["specific topic student struggled with","another weakness"],"improvement_tips":["specific actionable tip 1","specific actionable tip 2","specific actionable tip 3"],"predicted_exam_readiness":"Not Ready|Almost Ready|Ready"}\nBe specific about topics — use actual subject matter not generic phrases.';
-      var raw = await groqChat(sys, usr, 600, 0.5);
+      var sys = 'You are a strict viva examiner. Analyze ONLY what the student actually said. Return ONLY valid JSON.';
+      var log = tData.map(function(e,i){
+        var ans = (e.student_said && e.student_said.trim().length > 0) ? e.student_said : 'NO ANSWER';
+        return 'Q'+(i+1)+': '+e.question+' | Answer: '+ans+' | Verdict: '+(e.verdict?e.verdict.verdict:'Ungraded');
+      }).join('\n');
+      var usr = 'Viva topic: "'+topic+'". '+answered+'/'+total+' questions answered.\n\n'+log+
+        '\n\nIMPORTANT: Be strictly honest. If student gave NO ANSWER to most questions, strong_topics must be empty array []. Only list topics where student gave a correct answer as strengths.' +
+        '\nReturn ONLY this JSON:\n{"overall_feedback":"honest 3-4 sentence assessment","strong_topics":["topic where student answered correctly - empty if none"],"weak_topics":["topics with wrong or no answers"],"improvement_tips":["tip1","tip2","tip3"],"predicted_exam_readiness":"Not Ready|Almost Ready|Ready"}';
+      var raw = await groqChat(sys, usr, 600, 0.2);
       var analysis = parseJSON(raw);
-
+      // Validate — clear strengths if no correct answers
+      if (correct === 0 && analysis.strong_topics) analysis.strong_topics = [];
+      var r = {
       var r = {
         grade: grade, avgPct: avgPct, correct: correct, total: total,
         analysis: analysis, transcript: finalTranscript || transcript

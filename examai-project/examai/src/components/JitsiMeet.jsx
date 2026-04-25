@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from 'react';
 
 export default function JitsiMeet({ roomName, displayName, height }) {
   var containerRef = useRef(null);
-  var apiRef       = useRef(null);
+  var apiRef = useRef(null);
 
   useEffect(function() {
     if (!roomName || !containerRef.current) return;
@@ -10,34 +10,25 @@ export default function JitsiMeet({ roomName, displayName, height }) {
     function init() {
       if (apiRef.current) { try { apiRef.current.dispose(); } catch(e){} apiRef.current = null; }
       if (!containerRef.current) return;
-
-      // Store name in localStorage so Jitsi remembers it on refresh
-      try { localStorage.setItem('jitsiDisplayName', displayName || 'User'); } catch(e) {}
-
       try {
         apiRef.current = new window.JitsiMeetExternalAPI('meet.jit.si', {
-          roomName: 'dexam-' + roomName,
+          roomName: 'dexam-viva-' + String(roomName).replace(/[^a-zA-Z0-9]/g, ''),
           width: '100%',
           height: height || 380,
           parentNode: containerRef.current,
-          userInfo: {
-            displayName: displayName || 'User',
-            email: ''
-          },
+          userInfo: { displayName: displayName || 'User' },
           configOverwrite: {
-            prejoinPageEnabled: false,         // Skip pre-join page (no login screen)
+            prejoinPageEnabled: false,
             startWithAudioMuted: false,
             startWithVideoMuted: false,
             disableDeepLinking: true,
             enableWelcomePage: false,
-            requireDisplayName: false,         // Don't ask for name
-            disableThirdPartyRequests: true,
+            requireDisplayName: false,
             hideConferenceSubject: true,
             toolbarButtons: ['microphone', 'camera', 'fullscreen', 'tileview'],
             disablePolls: true,
-            subject: ' ',
-            defaultLocalDisplayName: displayName || 'User',
-            enableClosePage: false,
+            disableReactions: true,
+            subject: 'DExam Viva',
           },
           interfaceConfigOverwrite: {
             SHOW_JITSI_WATERMARK: false,
@@ -49,43 +40,25 @@ export default function JitsiMeet({ roomName, displayName, height }) {
             TOOLBAR_BUTTONS: ['microphone', 'camera', 'fullscreen', 'tileview'],
             SETTINGS_SECTIONS: ['devices'],
             MOBILE_APP_PROMO: false,
-            APP_NAME: 'DExam Viva',
-            NATIVE_APP_NAME: 'DExam',
-            PROVIDER_NAME: 'DExam',
-            DEFAULT_LOCAL_DISPLAY_NAME: displayName || 'User',
           }
         });
-        // Prevent accidental hangup — reconnect if user somehow leaves
+        // Rejoin if accidentally leaves
         apiRef.current.addListener('videoConferenceLeft', function() {
-          if (containerRef.current && roomName) {
-            setTimeout(function() {
-              if (containerRef.current) init();
-            }, 1500);
-          }
+          if (containerRef.current) setTimeout(function() { if (containerRef.current) init(); }, 2000);
         });
-      } catch(e) {
-        console.error('[Jitsi] init failed:', e);
-      }
+      } catch(e) { console.error('[Jitsi] init failed:', e); }
     }
 
     if (window.JitsiMeetExternalAPI) {
       init();
     } else {
       var existing = document.querySelector('script[src*="meet.jit.si/external_api"]');
-      if (existing) {
-        // Script already loading — wait for it
-        if (!window.JitsiMeetExternalAPI) {
-          existing.addEventListener('load', init);
-        } else {
-          init();
-        }
-        return;
-      }
+      if (existing) { existing.addEventListener('load', function() { setTimeout(init, 300); }); return; }
       var script = document.createElement('script');
       script.src = 'https://meet.jit.si/external_api.js';
       script.async = true;
-      script.onload = init;
-      script.onerror = function() { console.error('[Jitsi] Failed to load API'); };
+      script.onload = function() { setTimeout(init, 300); };
+      script.onerror = function() { console.error('[Jitsi] script failed to load'); };
       document.head.appendChild(script);
     }
 
@@ -95,12 +68,8 @@ export default function JitsiMeet({ roomName, displayName, height }) {
   }, [roomName]); // eslint-disable-line
 
   return (
-    <div ref={containerRef} style={{
-      width: '100%',
-      borderRadius: 8,
-      overflow: 'hidden',
-      background: '#000',
-      minHeight: height || 380
-    }}/>
+    <div style={{ width:'100%', borderRadius:8, overflow:'hidden', background:'#1a1a2e', minHeight: height || 380 }}>
+      <div ref={containerRef} style={{ width:'100%', minHeight: height || 380 }}/>
+    </div>
   );
 }
