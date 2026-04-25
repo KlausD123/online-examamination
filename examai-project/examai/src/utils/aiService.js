@@ -3,6 +3,23 @@
 // ── Core Groq call (exported so components can use directly) ──
 import { apiPost } from './api';
 
+// ── Question history tracker (prevents repeats across sessions) ──────────────
+function getUsedQuestions(topic) {
+  try {
+    var key = 'dexam_used_q_' + topic.toLowerCase().replace(/[^a-z0-9]/g,'_').slice(0,30);
+    return JSON.parse(localStorage.getItem(key) || '[]');
+  } catch(e) { return []; }
+}
+function saveUsedQuestions(topic, questions) {
+  try {
+    var key = 'dexam_used_q_' + topic.toLowerCase().replace(/[^a-z0-9]/g,'_').slice(0,30);
+    var existing = getUsedQuestions(topic);
+    var newOnes = questions.map(function(q) { return (q.question_text||q.question||'').slice(0,80); });
+    var merged = existing.concat(newOnes).slice(-50); // Keep last 50
+    localStorage.setItem(key, JSON.stringify(merged));
+  } catch(e) {}
+}
+
 export async function groqChat(sys, usr, max, temp) {
   // Route through backend — API key stays on server
   var data = await apiPost('/ai/chat', {

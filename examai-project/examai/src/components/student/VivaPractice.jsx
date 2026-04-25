@@ -71,14 +71,26 @@ export default function VivaPractice() {
     setLoading(true);
     try {
       var vpRnd = Math.floor(Math.random() * 9999);
-      var sys = 'You are a viva examiner. Return ONLY valid JSON array. Always generate COMPLETELY DIFFERENT questions each call — vary concepts, depth and phrasing.';
+      // Load previously used questions to avoid repeats
+      var usedKey = 'dexam_used_q_' + topic.toLowerCase().replace(/[^a-z0-9]/g,'_').slice(0,30) + '_viva';
+      var usedQs = [];
+      try { usedQs = JSON.parse(localStorage.getItem(usedKey) || '[]'); } catch(e) {}
+      var excludePart = usedQs.length > 0 ? ' Do NOT use these questions (used before): ' + usedQs.slice(-10).join(' | ') : '';
+      var sys = 'You are a viva examiner. Return ONLY valid JSON array. Generate COMPLETELY DIFFERENT questions each call.';
       var contextPart = topicInfo.trim() ? ' Context/Notes: ' + topicInfo.trim().slice(0, 800) : '';
-      var usr = 'Generate ' + numQ + ' UNIQUE oral viva questions on "' + topic + '".' + contextPart +
-        ' Each question must test a different aspect. Mix conceptual, applied, and analytical. Seed: ' + vpRnd + '.' +
+      var usr = 'Generate ' + numQ + ' UNIQUE oral viva questions on "' + topic + '".' + contextPart + excludePart +
+        ' Mix conceptual, applied, and analytical questions. Seed: ' + vpRnd + '.' +
         ' Return JSON: [{"question":"?","model_answer":"2-4 sentence answer","hint":"1 key point"}]';
       var raw = await groqChat(sys, usr, 2000, 0.7);
       var qs  = parseJSON(raw);
       if (!Array.isArray(qs) || qs.length === 0) throw new Error('Could not parse questions');
+      // Save used questions to prevent repeats next time
+      try {
+        var saveKey = 'dexam_used_q_' + topic.toLowerCase().replace(/[^a-z0-9]/g,'_').slice(0,30) + '_viva';
+        var prev = JSON.parse(localStorage.getItem(saveKey)||'[]');
+        var newQs = qs.map(function(q){return q.question.slice(0,80);});
+        localStorage.setItem(saveKey, JSON.stringify(prev.concat(newQs).slice(-50)));
+      } catch(e) {}
       setQuestions(qs);
       setQIndex(0);
       setTranscript([]);

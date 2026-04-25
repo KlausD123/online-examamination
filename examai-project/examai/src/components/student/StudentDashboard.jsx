@@ -32,7 +32,7 @@ export default function StudentDashboard({ navigate }) {
       <div className="stats-grid">
         <div className="stat-card"><div className="stat-value">{exams.length}</div><div className="stat-label">Available Exams</div></div>
         <div className="stat-card"><div className="stat-value">{subs.length}</div><div className="stat-label">Completed</div></div>
-        <div className="stat-card"><div className="stat-value" style={{ color: 'var(--success)' }}>{subs.length > 0 ? Math.round(subs.reduce(function(a, s) { return a + (s.total_score || 0); }, 0) / subs.length) : 0}%</div><div className="stat-label">Avg Score</div></div>
+        <div className="stat-card"><div className="stat-value" style={{ color: 'var(--success)' }}>{subs.length > 0 ? Math.round(subs.filter(function(s){return s.total_marks>0;}).reduce(function(a,s){ return a + ((s.total_score||0)/s.total_marks*100); },0) / Math.max(1,subs.filter(function(s){return s.total_marks>0;}).length)) : 0}%</div><div className="stat-label">Avg Score</div></div>
         <div className="stat-card"><div className="stat-value">{notifs.filter(function(n) { return n.viva_room_id; }).length}</div><div className="stat-label">Viva Invites</div></div>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>

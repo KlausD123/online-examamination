@@ -126,7 +126,7 @@ export default function VivaJoin() {
         <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#9ca3af', letterSpacing: 1, marginBottom: 8, textAlign: 'center', fontFamily: 'JetBrains Mono,monospace' }}>
           📹 LIVE SESSION
         </div>
-        <JitsiMeet roomName={vivaId} displayName={store.currentUser && store.currentUser.name || "Student"} height={260}/>
+        <JitsiMeet roomName={roomId} displayName={store.currentUser && store.currentUser.name || "Student"} height={260}/>
       </div>
 
       <div style={{ marginTop: 10, padding: '10px 16px', background: 'rgba(124,58,237,.1)', border: '1px solid rgba(124,58,237,.25)', borderRadius: 10, fontSize: '0.8rem', color: '#a78bfa', textAlign: 'center' }}>
