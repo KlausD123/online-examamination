@@ -151,114 +151,80 @@ export default function Analytics() {
           {examList.length === 0
             ? <div className="empty-state"><div className="empty-state-title">No exams with submissions yet</div></div>
             : <div>
-              {/* Horizontal exam tabs */}
+              {/* Horizontal exam selector tabs */}
               <div style={{ display:'flex', gap:8, overflowX:'auto', paddingBottom:4, marginBottom:20, scrollbarWidth:'none' }}>
                 {examList.map(function(e) {
-                  var isSel = (selExamTab||examList[0]).exam_id === e.exam_id;
+                  var isSelTab = (selExamTab ? selExamTab.exam_id : examList[0].exam_id) === e.exam_id;
                   return (
-                    <button key={e.exam_id} onClick={function(){setSelExamTab(e);}}
-                      style={{ padding:'8px 16px', borderRadius:20, border:'2px solid '+(isSel?'var(--accent)':'var(--border)'), background:isSel?'var(--accent-glow)':'var(--surface)', color:isSel?'var(--accent)':'var(--text3)', fontWeight:isSel?700:400, whiteSpace:'nowrap', cursor:'pointer', fontSize:'0.85rem', flexShrink:0 }}>
+                    <button key={e.exam_id} onClick={function(){ setSelExamTab(e); }}
+                      style={{ padding:'8px 16px', borderRadius:20, border:'2px solid '+(isSelTab?'var(--accent)':'var(--border)'), background:isSelTab?'var(--accent-glow)':'var(--surface)', color:isSelTab?'var(--accent)':'var(--text3)', fontWeight:isSelTab?700:400, whiteSpace:'nowrap', cursor:'pointer', fontSize:'0.85rem', flexShrink:0 }}>
                       {e.title}
                     </button>
                   );
                 })}
               </div>
-              {/* Show selected exam */}
-              {[selExamTab||examList[0]].map(function(exam) {
-              var passRate = exam.submission_count > 0
-                ? Math.round((exam.passed_count / exam.submission_count) * 100) : 0;
-              var avgPct = exam.total_marks > 0
-                ? Math.round(((exam.avg_score || 0) / exam.total_marks) * 100) : 0;
-              var gc2 = avgPct >= 80 ? '#16a34a' : avgPct >= 50 ? '#d97706' : '#dc2626';
-
-              // Students who took this exam
-              var examStudents = detail.filter(function(r) { return r.exam_id === exam.exam_id; });
-
-              return (
-                <div key={exam.exam_id} className="card" style={{ marginBottom:20 }}>
-                  {/* Exam header */}
-                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:16, flexWrap:'wrap', gap:12 }}>
-                    <div>
-                      <div style={{ fontWeight:700, fontSize:'1.1rem', color:'var(--text)', marginBottom:4 }}>{exam.title}</div>
-                      <div style={{ fontSize:'0.78rem', color:'var(--text3)' }}>{exam.total_marks} marks total</div>
-                    </div>
-                    <div style={{ display:'flex', gap:14, flexWrap:'wrap' }}>
-                      {[
-                        { label:'Submissions',  val: exam.submission_count,                  color:'var(--accent)' },
-                        { label:'Avg Score',     val: (exam.avg_score||0)+' / '+exam.total_marks, color:gc2 },
-                        { label:'Pass Rate',     val: passRate+'%',                            color: passRate>=50?'#16a34a':'#dc2626' },
-                        { label:'Violations',    val: exam.violation_count||0,                  color: exam.violation_count>0?'#dc2626':'#16a34a' },
-                      ].map(function(st) {
-                        return (
-                          <div key={st.label} style={{ textAlign:'center' }}>
-                            <div style={{ fontWeight:800, fontSize:'1.2rem', color:st.color }}>{st.val}</div>
-                            <div style={{ fontSize:'0.68rem', color:'var(--text3)', textTransform:'uppercase', letterSpacing:0.5 }}>{st.label}</div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Progress bar */}
-                  <div style={{ height:6, background:'var(--surface3)', borderRadius:3, overflow:'hidden', marginBottom:16 }}>
-                    <div style={{ height:'100%', width:avgPct+'%', background:'linear-gradient(90deg,'+gc2+'88,'+gc2+')', borderRadius:3, transition:'width .5s' }}/>
-                  </div>
-
-                  {/* Per-student rows for this exam */}
-                  {examStudents.length > 0 && (
-                    <div>
-                      <div style={{ fontSize:'0.72rem', fontWeight:700, color:'var(--text3)', textTransform:'uppercase', letterSpacing:1, marginBottom:10, fontFamily:'JetBrains Mono,monospace' }}>Student Results</div>
-                      {/* Header */}
-                      <div style={{ display:'grid', gridTemplateColumns:'1fr 80px 70px 70px 70px 80px 80px', gap:8, padding:'5px 10px', background:'var(--surface2)', borderRadius:6, marginBottom:4, fontSize:'0.68rem', fontWeight:700, color:'var(--text3)', textTransform:'uppercase', letterSpacing:0.5 }}>
-                        <span>Student</span>
-                        <span style={{textAlign:'center'}}>Score</span>
-                        <span style={{textAlign:'center'}}>Grade</span>
-                        <span style={{textAlign:'center',color:'#16a34a'}}>✓ Right</span>
-                        <span style={{textAlign:'center',color:'#dc2626'}}>✗ Wrong</span>
-                        <span style={{textAlign:'center'}}>Date</span>
-                        <span style={{textAlign:'center'}}>Status</span>
+              {/* Selected exam detail */}
+              {function() {
+                var exam = selExamTab || examList[0];
+                var passRate = exam.submission_count > 0 ? Math.round((exam.passed_count / exam.submission_count) * 100) : 0;
+                var avgPct = exam.total_marks > 0 ? Math.round(((exam.avg_score || 0) / exam.total_marks) * 100) : 0;
+                var gc2 = avgPct >= 80 ? '#16a34a' : avgPct >= 50 ? '#d97706' : '#dc2626';
+                var examStudents = detail.filter(function(r) { return r.exam_id === exam.exam_id; });
+                return (
+                  <div className="card" key={exam.exam_id}>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:16, flexWrap:'wrap', gap:12 }}>
+                      <div>
+                        <div style={{ fontWeight:700, fontSize:'1.1rem', marginBottom:4 }}>{exam.title}</div>
+                        <div style={{ fontSize:'0.78rem', color:'var(--text3)' }}>{exam.total_marks} marks total</div>
                       </div>
-                      {examStudents.map(function(r, i) {
-                        var isCheated = r.cheating_detected === 1 || r.status === 'cheated';
-                        var pct = r.total_marks > 0 ? Math.round(((r.total_score||0)/r.total_marks)*100) : 0;
-                        var gradeCol = gc(r.grade);
-                        return (
-                          <div key={i} style={{ display:'grid', gridTemplateColumns:'1fr 80px 70px 70px 70px 80px 80px', gap:8, padding:'8px 10px', borderBottom:'1px solid var(--border)', alignItems:'center', background: isCheated?'rgba(220,38,38,.03)':'transparent', borderLeft: isCheated?'3px solid #dc2626':'3px solid transparent', borderRadius:4 }}>
-                            <div>
-                              <div style={{ fontWeight:600, fontSize:'0.85rem' }}>{r.student_name}</div>
-                              <div style={{ fontSize:'0.72rem', color:'var(--text3)' }}>{r.email}</div>
-                            </div>
-                            <div style={{ textAlign:'center' }}>
-                              <div style={{ fontWeight:700, fontSize:'0.88rem', color:gradeCol }}>{r.total_score||0}/{r.total_marks}</div>
-                              <div style={{ fontSize:'0.68rem', color:'var(--text3)' }}>{pct}%</div>
-                            </div>
-                            <div style={{ textAlign:'center' }}>
-                              <span style={{ fontWeight:800, fontSize:'1rem', color:gradeCol }}>{isCheated?'—':r.grade||'—'}</span>
-                            </div>
-                            <div style={{ textAlign:'center', fontWeight:700, color:'#16a34a' }}>{r.correct_count||0}</div>
-                            <div style={{ textAlign:'center', fontWeight:700, color:'#dc2626' }}>{r.wrong_count||0}</div>
-                            <div style={{ textAlign:'center', fontSize:'0.72rem', color:'var(--text3)' }}>{fmt(r.submit_time)}</div>
-                            <div style={{ textAlign:'center' }}>
-                              {isCheated
-                                ? <span className="badge badge-danger" style={{fontSize:'0.62rem'}}>🚫 Cheated</span>
-                                : <span className="badge badge-success" style={{fontSize:'0.62rem'}}>✅ Done</span>
-                              }
-                            </div>
+                      <div style={{ display:'flex', gap:14, flexWrap:'wrap' }}>
+                        {[
+                          { label:'Submissions', val: exam.submission_count, color:'var(--accent)' },
+                          { label:'Avg Score', val: (exam.avg_score||0).toFixed(1)+' / '+exam.total_marks, color:gc2 },
+                          { label:'Pass Rate', val: passRate+'%', color: passRate>=50?'#16a34a':'#dc2626' },
+                          { label:'Violations', val: exam.violation_count||0, color: (exam.violation_count||0)>0?'#dc2626':'#16a34a' },
+                        ].map(function(s, si) { return (
+                          <div key={si} style={{ textAlign:'center', padding:'8px 16px', background:'var(--surface2)', borderRadius:8, minWidth:80 }}>
+                            <div style={{ fontWeight:800, fontSize:'1.2rem', color:s.color }}>{s.val}</div>
+                            <div style={{ fontSize:'0.7rem', color:'var(--text3)', marginTop:2 }}>{s.label}</div>
                           </div>
-                        );
-                      })}
+                        ); })}
+                      </div>
                     </div>
-                  )}
-                </div>
-              );
-            })
+                    {examStudents.length > 0 && (
+                      <div style={{ marginTop:16 }}>
+                        <div style={{ fontWeight:600, marginBottom:10, fontSize:'0.85rem' }}>Student Results</div>
+                        <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.82rem' }}>
+                          <thead><tr style={{ borderBottom:'2px solid var(--border)' }}>
+                            <th style={{ textAlign:'left', padding:'6px 8px', color:'var(--text3)' }}>Student</th>
+                            <th style={{ textAlign:'center', padding:'6px 8px', color:'var(--text3)' }}>Score</th>
+                            <th style={{ textAlign:'center', padding:'6px 8px', color:'var(--text3)' }}>Grade</th>
+                            <th style={{ textAlign:'center', padding:'6px 8px', color:'var(--text3)' }}>Status</th>
+                          </tr></thead>
+                          <tbody>
+                            {examStudents.map(function(s, si) {
+                              var sg = s.grade==='A+'||s.grade==='A'?'#16a34a':s.grade==='B'?'#2563eb':s.grade==='C'?'#d97706':'#dc2626';
+                              return (
+                                <tr key={si} style={{ borderBottom:'1px solid var(--border)' }}>
+                                  <td style={{ padding:'8px', fontWeight:600 }}>{s.student_name}</td>
+                                  <td style={{ padding:'8px', textAlign:'center' }}>{s.total_score||0}</td>
+                                  <td style={{ padding:'8px', textAlign:'center', fontWeight:700, color:sg }}>{s.grade||'-'}</td>
+                                  <td style={{ padding:'8px', textAlign:'center' }}><span className={'badge badge-'+(s.status==='cheated'?'danger':'success')}>{s.status}</span></td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                );
+              }()}
+            </div>
           }
         </div>
       )}
 
-      {/* ══════════════════════════════════════════════════════
-          TAB: STUDENT PERFORMANCE
-         ══════════════════════════════════════════════════════ */}
       {tab === 'students_removed' && (
         <div>
           {/* Filter by exam */}
