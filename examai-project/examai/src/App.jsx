@@ -100,7 +100,6 @@ export default function App() {
         case 'viva':      return React.createElement(VivaRoom,       null);
         case 'courses':   return React.createElement(CoursesPanel,   null);
         case 'courseanalytics': return React.createElement(CourseAnalytics, null);
-        case 'profile':   return React.createElement(StudentProfile, null);
         default:          return React.createElement(AdminDashboard, { navigate: navigate });
       }
     } else {
@@ -154,9 +153,9 @@ export default function App() {
         </div>
         <div className="topbar-right">
           {/* Clickable profile avatar */}
-          <div className="topbar-user" onClick={function() { navigate('profile'); }}
-            style={{ cursor: 'pointer', border: page === 'profile' ? '2px solid var(--accent)' : '2px solid transparent', borderRadius: 40, transition: 'var(--transition)' }}
-            title="View Profile">
+          <div className="topbar-user" onClick={function() { if (!isAdmin) navigate('profile'); }}
+            style={{ cursor: isAdmin ? 'default' : 'pointer', border: page === 'profile' ? '2px solid var(--accent)' : '2px solid transparent', borderRadius: 40, transition: 'var(--transition)' }}
+            title={isAdmin ? store.currentUser.name : 'View Profile'}>
             <div className="topbar-avatar" style={{ overflow: 'hidden' }}>
               {avatarUrl
                 ? <img src={avatarUrl} alt={initials} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }}/>
