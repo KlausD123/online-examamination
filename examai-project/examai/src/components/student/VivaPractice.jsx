@@ -149,7 +149,7 @@ export default function VivaPractice() {
     mr.onstop = async function() {
       if (!whisperRunning.current) return;
       var blob = new Blob(audioChunks.current, { type: mimeType });
-      if (blob.size < 3000) { runWhisperLoop(stream); return; } // skip silence
+      if (blob.size < 15000) { runWhisperLoop(stream); return; } // skip silence // skip silence
 
       try {
         var reader = new FileReader();

@@ -62,17 +62,18 @@ app.post('/api/ai/vision', require('./middleware/auth').authenticateToken, async
 
 
 app.post('/api/ai/transcribe', require('./middleware/auth').authenticateToken, async (req, res) => {
-  // Accepts base64 audio, sends to Groq Whisper for transcription
   const { audio, mimeType } = req.body;
   if (!audio) return res.status(400).json({ error: 'audio required' });
   if (!process.env.GROQ_API_KEY) return res.status(503).json({ error: 'AI not configured' });
   try {
-    // Decode base64 to buffer
     const buffer = Buffer.from(audio, 'base64');
-    const ext    = (mimeType || 'audio/webm').includes('mp4') ? 'mp4'
-                 : (mimeType || '').includes('ogg') ? 'ogg' : 'webm';
 
-    // Build multipart form manually
+    // Reject blobs that are too small to contain real speech (< 15KB ≈ ~0.5s of audio)
+    if (buffer.length < 15000) return res.json({ text: '' });
+
+    const ext = (mimeType || 'audio/webm').includes('mp4') ? 'mp4'
+              : (mimeType || '').includes('ogg') ? 'ogg' : 'webm';
+
     const boundary = '----FormBoundary' + Math.random().toString(36).slice(2);
     const CRLF = '\r\n';
 
@@ -93,7 +94,10 @@ app.post('/api/ai/transcribe', require('./middleware/auth').authenticateToken, a
       'Student answering exam questions in English.' +
       CRLF + '--' + boundary + CRLF +
       'Content-Disposition: form-data; name="response_format"' + CRLF + CRLF +
-      'json' +
+      'verbose_json' +
+      CRLF + '--' + boundary + CRLF +
+      'Content-Disposition: form-data; name="temperature"' + CRLF + CRLF +
+      '0' +
       CRLF + '--' + boundary + '--' + CRLF
     );
     const body = Buffer.concat([pre, buffer, modelField]);
@@ -109,7 +113,40 @@ app.post('/api/ai/transcribe', require('./middleware/auth').authenticateToken, a
     });
     const data = await r.json();
     if (data.error) return res.status(500).json({ error: data.error.message || 'Whisper error' });
-    res.json({ text: data.text || '' });
+
+    // ── Hallucination / silence filters ─────────────────────────────
+    const raw = (data.text || '').trim();
+
+    // 1. Check segment-level no_speech_prob — if any segment is mostly silence, reject
+    const segments = data.segments || [];
+    const avgNoSpeech = segments.length > 0
+      ? segments.reduce((a, s) => a + (s.no_speech_prob || 0), 0) / segments.length
+      : 0;
+    if (avgNoSpeech > 0.6) return res.json({ text: '' }); // mostly silence
+
+    // 2. Known Whisper hallucination phrases (it outputs these on silence/noise)
+    const HALLUCINATIONS = [
+      'thank you', 'thanks for watching', 'subscribe', 'bye', 'goodbye',
+      'please subscribe', 'like and subscribe', 'see you next time',
+      'you', 'the', 'i', 'a', 'um', 'uh', 'hmm', '...', '…',
+      'subtitles by', 'transcribed by', 'translated by',
+      'www.', '.com', 'http',
+    ];
+    const lower = raw.toLowerCase().replace(/[.,!?]/g, '').trim();
+    if (HALLUCINATIONS.includes(lower)) return res.json({ text: '' });
+
+    // 3. Reject if fewer than 3 words (likely noise artifact)
+    const wordCount = raw.split(/\s+/).filter(Boolean).length;
+    if (wordCount < 3) return res.json({ text: '' });
+
+    // 4. Reject repetitive hallucinations (same word/phrase repeated)
+    const words = raw.split(/\s+/);
+    if (words.length >= 4) {
+      const unique = new Set(words.map(w => w.toLowerCase()));
+      if (unique.size / words.length < 0.35) return res.json({ text: '' }); // >65% repetition
+    }
+
+    res.json({ text: raw });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

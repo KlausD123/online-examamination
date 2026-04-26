@@ -685,15 +685,77 @@ export default function VivaRoom() {
   var audioChunks    = useRef([]);
   var whisperTimer   = useRef(null);
   var whisperRunning = useRef(false);
+  var audioCtxRef    = useRef(null);   // AudioContext for mixing tab + mic
+  var tabStreamsRef   = useRef([]);    // All captured streams for cleanup
+  var audioCtxRef    = useRef(null);   // AudioContext for mixing tab + mic audio
+  var tabStreamsRef   = useRef([]);    // Tab/mic MediaStream tracks for cleanup
 
   async function startSTT() {
     stopSTT();
     whisperRunning.current = true;
+
     try {
-      var stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      startWhisperLoop(stream);
+      // Strategy: capture BOTH tab audio (Jitsi student voice) + admin mic,
+      // mix them with AudioContext so Whisper hears the student clearly.
+      var audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      var dest     = audioCtx.createMediaStreamDestination();
+      var sources  = [];
+
+      // 1. Tab audio — captures Jitsi call output (student's voice)
+      var tabStream = null;
+      try {
+        tabStream = await navigator.mediaDevices.getDisplayMedia({
+          video: false,          // audio-only capture, no screen share needed
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            sampleRate:       16000,
+          },
+          // Chrome 109+: suppress the "Share your screen" dialog — audio only
+          preferCurrentTab: true,
+        });
+        if (tabStream.getAudioTracks().length > 0) {
+          var tabSrc = audioCtx.createMediaStreamSource(tabStream);
+          tabSrc.connect(dest);
+          sources.push(tabStream);
+        }
+      } catch(tabErr) {
+        // Tab capture denied or not supported — fall back to mic only
+        console.info('[STT] Tab audio not available, using mic only:', tabErr.message);
+      }
+
+      // 2. Admin mic — captures ambient + ensures we hear admin speech too
+      try {
+        var micStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            sampleRate:       16000,
+          },
+          video: false,
+        });
+        var micSrc = audioCtx.createMediaStreamSource(micStream);
+        micSrc.connect(dest);
+        sources.push(micStream);
+      } catch(micErr) {
+        if (sources.length === 0) {
+          // No audio at all
+          audioCtx.close();
+          setStatusMsg('Mic access denied — allow microphone to capture student answer');
+          whisperRunning.current = false;
+          return;
+        }
+        // Tab stream worked, mic optional
+        console.info('[STT] Mic not available, using tab audio only');
+      }
+
+      // Store AudioContext for cleanup
+      audioCtxRef.current = audioCtx;
+      tabStreamsRef.current = sources;
+
+      startWhisperLoop(dest.stream);
     } catch(e) {
-      setStatusMsg('Mic access denied — allow microphone to capture student answer');
+      setStatusMsg('Could not start audio capture: ' + e.message);
       whisperRunning.current = false;
     }
   }
@@ -720,7 +782,7 @@ export default function VivaRoom() {
       if (audioChunks.current.length === 0) { startWhisperLoop(stream); return; }
       var blob = new Blob(audioChunks.current, { type: mimeType });
       // Skip tiny blobs (silence) — Whisper min is ~0.1s
-      if (blob.size < 3000) { startWhisperLoop(stream); return; }
+      if (blob.size < 15000) { startWhisperLoop(stream); return; } // skip silence/tiny chunks
 
       // Convert to base64 and send to backend
       try {
@@ -770,6 +832,16 @@ export default function VivaRoom() {
       try { mediaRecRef.current.stop(); } catch(e) {}
     }
     mediaRecRef.current = null;
+    // Stop all tab/mic streams
+    (tabStreamsRef.current || []).forEach(function(s) {
+      try { s.getTracks().forEach(function(t){ t.stop(); }); } catch(e) {}
+    });
+    tabStreamsRef.current = [];
+    // Close AudioContext
+    if (audioCtxRef.current) {
+      try { audioCtxRef.current.close(); } catch(e) {}
+      audioCtxRef.current = null;
+    }
   }
 
   // ====================================================
@@ -1872,11 +1944,16 @@ export default function VivaRoom() {
                       ? <span>{capturedText}{liveWords && <span style={{ color: '#9ca3af', fontStyle: 'italic' }}> {liveWords}</span>}</span>
                       : <span style={{ color: '#374151', fontStyle: 'italic' }}>
                           {flow === 'speaking' ? '🔊 Wait — student is listening to the question…'
-                           : flow === 'listening' ? '🎤 Student speak now — capturing via Whisper…'
+                           : flow === 'listening' ? '🎤 Capturing student voice from Jitsi via Groq Whisper…'
                            : flow === 'grading'  ? '⚡ Grading…'
                            : 'Waiting for student response…'}
                         </span>}
                   </div>
+                  {flow === 'listening' && !capturedText && (
+                    <div style={{ fontSize: '0.68rem', color: '#6b7280', marginTop: 5, padding: '4px 8px', background: 'rgba(255,255,255,.03)', borderRadius: 5 }}>
+                      💡 If browser asked to share tab audio — select the <strong>DExam tab</strong> to capture Jitsi audio directly
+                    </div>
+                  )}
                 </div>
               )}
             </div>
