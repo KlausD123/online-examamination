@@ -327,8 +327,6 @@ export default function VivaPractice() {
     recordingRef.current = false;
     stopWhisper();
     stopTTS();
-    setPhase('results');
-    setAnalyzing(true);
 
     var tData = finalTranscript || transcript;
     var answered = tData.filter(function(e){ return e.student_said && e.student_said.trim(); }).length;
@@ -337,6 +335,12 @@ export default function VivaPractice() {
     var avgPct   = total > 0 ? Math.round(tData.reduce(function(a,e){ return a + (e.verdict ? (e.verdict.score_pct||0) : 0); }, 0) / total) : 0;
     var grade    = avgPct>=90?'A+':avgPct>=80?'A':avgPct>=70?'B':avgPct>=60?'C':avgPct>=50?'D':'F';
 
+    // ── Show score + transcript IMMEDIATELY, no waiting ──────────────
+    setResults({ grade, avgPct, correct, total, analysis: null, transcript: tData });
+    setPhase('results');
+    // Save to local without analysis first
+    saveLocal(topic, total, correct, avgPct, grade, null);
+
     if (answered === 0 || total === 0) {
       var noAns = {
         overall_feedback: 'No answers were recorded. Check microphone permissions and try again.',
@@ -344,38 +348,41 @@ export default function VivaPractice() {
         improvement_tips: ['Allow microphone access in browser settings', 'Use Chrome or Edge for best results', 'Speak clearly after each question finishes'],
         predicted_exam_readiness: 'Not Ready'
       };
-      setResults({ grade: 'F', avgPct: 0, correct: 0, total: total, analysis: noAns, transcript: tData });
+      setResults(function(r) { return Object.assign({}, r, { analysis: noAns }); });
       saveLocal(topic, total, 0, 0, 'F', noAns);
-      setAnalyzing(false); return;
+      return;
     }
 
-    try {
-      var sys2 = 'You are a strict viva examiner. Analyze only what student actually said. Return ONLY valid JSON.';
-      var log = tData.map(function(e, i) {
-        return 'Q'+(i+1)+': '+e.question+' | Answer: '+(e.student_said && e.student_said.trim() ? e.student_said : 'NO ANSWER')+' | Verdict: '+(e.verdict ? e.verdict.verdict : 'Ungraded');
-      }).join('\n');
-      var usr2 = 'Topic: "' + topic + '". ' + answered + '/' + total + ' answered.\n\n' + log +
-        '\n\nBe strictly honest. Return: {"overall_feedback":"3-4 sentence assessment","strong_topics":["topic where correct — empty if none"],"weak_topics":["topics with wrong/no answers"],"improvement_tips":["tip1","tip2","tip3"],"predicted_exam_readiness":"Not Ready|Almost Ready|Ready"}';
-      var raw2 = await groqChat(sys2, usr2, 600, 0.2);
-      var analysis = parseJSON(raw2);
-      if (correct === 0 && analysis && analysis.strong_topics) analysis.strong_topics = [];
-      var r = { grade, avgPct, correct, total, analysis, transcript: tData };
-      setResults(r);
-      saveLocal(topic, total, correct, avgPct, grade, analysis);
-    } catch(e) {
-      var wrong = tData.filter(function(e){ return e.verdict && !e.verdict.correct; });
-      var right  = tData.filter(function(e){ return e.verdict && e.verdict.correct; });
-      var fb = {
-        overall_feedback: 'Session done — ' + correct + '/' + total + ' correct (' + avgPct + '%)',
-        strong_topics: right.slice(0,3).map(function(e){ return e.question.slice(0,50); }),
-        weak_topics:   wrong.slice(0,3).map(function(e){ return e.question.slice(0,50); }),
-        improvement_tips: ['Review incorrect answers', 'Practice weak topics', 'Focus on clear concept explanation'],
-        predicted_exam_readiness: avgPct >= 70 ? 'Almost Ready' : 'Not Ready'
-      };
-      setResults({ grade, avgPct, correct, total, analysis: fb, transcript: tData });
-      saveLocal(topic, total, correct, avgPct, grade, fb);
-    }
-    setAnalyzing(false);
+    // ── Load AI analysis in background — page already visible ────────
+    setAnalyzing(true);
+    setTimeout(async function() {
+      try {
+        var sys2 = 'You are a strict viva examiner. Analyze only what student actually said. Return ONLY valid JSON.';
+        var log = tData.map(function(e, i) {
+          return 'Q'+(i+1)+': '+e.question+' | Answer: '+(e.student_said && e.student_said.trim() ? e.student_said : 'NO ANSWER')+' | Verdict: '+(e.verdict ? e.verdict.verdict : 'Ungraded');
+        }).join('\n');
+        var usr2 = 'Topic: "' + topic + '". ' + answered + '/' + total + ' answered.\n\n' + log +
+          '\n\nBe strictly honest. Return: {"overall_feedback":"3-4 sentence assessment","strong_topics":["topic where correct — empty if none"],"weak_topics":["topics with wrong/no answers"],"improvement_tips":["tip1","tip2","tip3"],"predicted_exam_readiness":"Not Ready|Almost Ready|Ready"}';
+        var raw2 = await groqChat(sys2, usr2, 600, 0.2);
+        var analysis = parseJSON(raw2);
+        if (correct === 0 && analysis && analysis.strong_topics) analysis.strong_topics = [];
+        setResults(function(r) { return Object.assign({}, r, { analysis: analysis }); });
+        saveLocal(topic, total, correct, avgPct, grade, analysis);
+      } catch(e) {
+        var wrong2 = tData.filter(function(e){ return e.verdict && !e.verdict.correct; });
+        var right2 = tData.filter(function(e){ return e.verdict && e.verdict.correct; });
+        var fb = {
+          overall_feedback: 'Session done — ' + correct + '/' + total + ' correct (' + avgPct + '%)',
+          strong_topics: right2.slice(0,3).map(function(e){ return e.question.slice(0,50); }),
+          weak_topics:   wrong2.slice(0,3).map(function(e){ return e.question.slice(0,50); }),
+          improvement_tips: ['Review incorrect answers', 'Practice weak topics', 'Focus on clear concept explanation'],
+          predicted_exam_readiness: avgPct >= 70 ? 'Almost Ready' : 'Not Ready'
+        };
+        setResults(function(r) { return Object.assign({}, r, { analysis: fb }); });
+        saveLocal(topic, total, correct, avgPct, grade, fb);
+      }
+      setAnalyzing(false);
+    }, 100); // tiny delay so React renders the results page first
   }
 
   function saveLocal(subj, total, correct, avgPct, grade, analysis) {
@@ -633,50 +640,69 @@ export default function VivaPractice() {
         </div>
       </div>
 
-      {analyzing ? (
-        <div className="loading-center"><div className="spinner"></div><span>Generating analysis…</span></div>
-      ) : analysis && (
-        <div className="card" style={{ marginBottom: 20 }}>
-          <div className="card-title" style={{ marginBottom: 14 }}>📊 AI Analysis</div>
-          {analysis.overall_feedback && (
-            <div style={{ padding: '12px 14px', background: 'var(--surface2)', borderRadius: 8, marginBottom: 16, fontSize: '0.9rem', color: 'var(--text2)', lineHeight: 1.7 }}>
-              {analysis.overall_feedback}
+      {/* AI Analysis — loads in background after score is already visible */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+          <div className="card-title" style={{ margin: 0 }}>📊 AI Analysis</div>
+          {analyzing && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto' }}>
+              <div className="spinner" style={{ width: 14, height: 14 }}/>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text3)' }}>Analysing…</span>
             </div>
           )}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
-            <div style={{ background: 'rgba(22,163,74,.06)', borderRadius: 10, padding: '12px 14px', border: '1px solid rgba(22,163,74,.2)' }}>
-              <div style={{ fontWeight: 700, color: '#16a34a', marginBottom: 10, fontSize: '0.85rem' }}>💪 Strengths</div>
-              {(analysis.strong_topics || []).length === 0
-                ? <div style={{ color: 'var(--text3)', fontSize: '0.82rem' }}>Keep practicing to build strengths</div>
-                : (analysis.strong_topics || []).map(function(t, i) { return (
-                  <div key={i} style={{ fontSize: '0.85rem', padding: '4px 0', color: 'var(--text)' }}>✅ {t}</div>
-                ); })
-              }
-            </div>
-            <div style={{ background: 'rgba(220,38,38,.06)', borderRadius: 10, padding: '12px 14px', border: '1px solid rgba(220,38,38,.2)' }}>
-              <div style={{ fontWeight: 700, color: '#dc2626', marginBottom: 10, fontSize: '0.85rem' }}>📌 Needs Work</div>
-              {(analysis.weak_topics || []).length === 0
-                ? <div style={{ color: 'var(--text3)', fontSize: '0.82rem' }}>No major gaps — great job!</div>
-                : (analysis.weak_topics || []).map(function(t, i) { return (
-                  <div key={i} style={{ fontSize: '0.85rem', padding: '4px 0', color: 'var(--text)' }}>⚠️ {t}</div>
-                ); })
-              }
-            </div>
-          </div>
-          {(analysis.improvement_tips || []).length > 0 && (
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ fontWeight: 700, marginBottom: 8, fontSize: '0.85rem' }}>📈 Tips</div>
-              {analysis.improvement_tips.map(function(t, i) { return <div key={i} style={{ fontSize: '0.85rem', padding: '4px 0', color: 'var(--text2)' }}>{i+1}. {t}</div>; })}
-            </div>
-          )}
-          {analysis.predicted_exam_readiness && (
-            <div style={{ padding: '10px 14px', background: 'var(--accent-glow)', borderRadius: 8, fontWeight: 700, color: 'var(--accent)' }}>
-              🎯 Exam Readiness: {analysis.predicted_exam_readiness}
-            </div>
-          )}
-          <YouTubeResources weaknesses={analysis.weak_topics} subject={topic} />
         </div>
-      )}
+
+        {analyzing && !analysis ? (
+          /* Skeleton — shown while AI loads, page is already usable */
+          <div>
+            {[80, 60, 90, 50].map(function(w, i) {
+              return (
+                <div key={i} style={{ height: 14, borderRadius: 7, marginBottom: 10,
+                  background: 'linear-gradient(90deg, var(--surface2) 25%, var(--surface3) 50%, var(--surface2) 75%)',
+                  backgroundSize: '200% 100%', animation: 'shimmer 1.4s infinite',
+                  width: w + '%', opacity: 1 - i * 0.15 }}/>
+              );
+            })}
+            <style>{`@keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }`}</style>
+          </div>
+        ) : analysis ? (
+          <div>
+            {analysis.overall_feedback && (
+              <div style={{ padding: '12px 14px', background: 'var(--surface2)', borderRadius: 8, marginBottom: 16, fontSize: '0.9rem', color: 'var(--text2)', lineHeight: 1.7 }}>
+                {analysis.overall_feedback}
+              </div>
+            )}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+              <div style={{ background: 'rgba(22,163,74,.06)', borderRadius: 10, padding: '12px 14px', border: '1px solid rgba(22,163,74,.2)' }}>
+                <div style={{ fontWeight: 700, color: '#16a34a', marginBottom: 10, fontSize: '0.85rem' }}>💪 Strengths</div>
+                {(analysis.strong_topics || []).length === 0
+                  ? <div style={{ color: 'var(--text3)', fontSize: '0.82rem' }}>Keep practicing to build strengths</div>
+                  : (analysis.strong_topics || []).map(function(t, i) { return <div key={i} style={{ fontSize: '0.85rem', padding: '4px 0', color: 'var(--text)' }}>✅ {t}</div>; })
+                }
+              </div>
+              <div style={{ background: 'rgba(220,38,38,.06)', borderRadius: 10, padding: '12px 14px', border: '1px solid rgba(220,38,38,.2)' }}>
+                <div style={{ fontWeight: 700, color: '#dc2626', marginBottom: 10, fontSize: '0.85rem' }}>📌 Needs Work</div>
+                {(analysis.weak_topics || []).length === 0
+                  ? <div style={{ color: 'var(--text3)', fontSize: '0.82rem' }}>No major gaps — great job!</div>
+                  : (analysis.weak_topics || []).map(function(t, i) { return <div key={i} style={{ fontSize: '0.85rem', padding: '4px 0', color: 'var(--text)' }}>⚠️ {t}</div>; })
+                }
+              </div>
+            </div>
+            {(analysis.improvement_tips || []).length > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontWeight: 700, marginBottom: 8, fontSize: '0.85rem' }}>📈 Tips</div>
+                {analysis.improvement_tips.map(function(t, i) { return <div key={i} style={{ fontSize: '0.85rem', padding: '4px 0', color: 'var(--text2)' }}>{i+1}. {t}</div>; })}
+              </div>
+            )}
+            {analysis.predicted_exam_readiness && (
+              <div style={{ padding: '10px 14px', background: 'var(--accent-glow)', borderRadius: 8, fontWeight: 700, color: 'var(--accent)' }}>
+                🎯 Exam Readiness: {analysis.predicted_exam_readiness}
+              </div>
+            )}
+            <YouTubeResources weaknesses={analysis.weak_topics} subject={topic} />
+          </div>
+        ) : null}
+      </div>
 
       <div className="card">
         <div className="card-title" style={{ marginBottom: 16 }}>📋 Answer Breakdown</div>
