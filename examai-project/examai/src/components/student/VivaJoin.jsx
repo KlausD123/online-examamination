@@ -7,39 +7,30 @@ import { io } from 'socket.io-client';
 var SOCKET_URL = 'https://online-examamination-production.up.railway.app';
 var API        = 'https://online-examamination-production.up.railway.app/api';
 
-var SPEECH_THRESHOLD = 12;   // Lowered for student mic — picks up normal speech reliably
-var MIN_SPEECH_MS    = 400;
-var MIN_BLOB_BYTES   = 10000;
-
-function getMimeType() {
-  return MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus'
-       : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm'
-       : MediaRecorder.isTypeSupported('audio/ogg')  ? 'audio/ogg' : 'audio/mp4';
-}
-
 export default function VivaJoin() {
   var store = useStore();
-  var [phase,       setPhase]      = useState('join');
-  var [roomId,      setRoomId]     = useState('');
-  var [session,     setSession]    = useState(null);
-  var [invites,     setInvites]    = useState([]);
-  var [currentQ,    setCurrentQ]   = useState('');
-  var [qFlash,      setQFlash]     = useState(false);
-  var [sockStatus,  setSockStatus] = useState('connecting');
-  var [liveAnswer,  setLiveAnswer] = useState('');   // student's live transcription
-  var [capturing,   setCapturing]  = useState(false);
+  var [phase,      setPhase]     = useState('join');
+  var [roomId,     setRoomId]    = useState('');
+  var [session,    setSession]   = useState(null);
+  var [invites,    setInvites]   = useState([]);
+  var [currentQ,   setCurrentQ]  = useState('');
+  var [qFlash,     setQFlash]    = useState(false);
+  var [sockStatus, setSockStatus]= useState('connecting');
+  var [liveText,   setLiveText]  = useState('');
+  var [recording,  setRecording] = useState(false);
 
-  var synthRef     = useRef(window.speechSynthesis);
-  var sockRef      = useRef(null);
-  var roomIdRef    = useRef('');
-  var currentQRef  = useRef('');
-
-  // Groq Whisper VAD refs
-  var vadIvRef     = useRef(null);
-  var audioCtxRef  = useRef(null);
-  var micStreamRef = useRef(null);
-  var captureRef   = useRef(false);
-  var liveAnsRef   = useRef('');
+  // ── Refs (same pattern as VivaPractice) ──────────────────────────
+  var synthRef       = useRef(window.speechSynthesis);
+  var sockRef        = useRef(null);
+  var roomIdRef      = useRef('');
+  var mediaRecRef    = useRef(null);
+  var audioChunks    = useRef([]);
+  var whisperTimer   = useRef(null);
+  var whisperRunning = useRef(false);
+  var micStream      = useRef(null);
+  var silenceTimer   = useRef(null);
+  var liveTextRef    = useRef('');
+  var recordingRef   = useRef(false);
 
   useEffect(function() {
     apiGet('/notifications').then(function(n) {
@@ -51,157 +42,126 @@ export default function VivaJoin() {
 
   useEffect(function() {
     return function() {
-      stopCapture();
+      stopWhisper();
       synthRef.current && synthRef.current.cancel();
       if (sockRef.current) { try { sockRef.current.disconnect(); } catch(e){} }
     };
   }, []); // eslint-disable-line
 
-  // ── Groq Whisper VAD capture (student side) ───────────────────────
-  async function startCapture() {
-    stopCapture();
-    captureRef.current = true;
-    liveAnsRef.current = '';
-    setLiveAnswer('');
-    setCapturing(true);
+  // ── Groq Whisper — exact same approach as VivaPractice ───────────
+  async function startRecording() {
+    stopWhisper();
+    liveTextRef.current = '';
+    setLiveText('');
+    setRecording(true);
+    recordingRef.current = true;
+    whisperRunning.current = true;
 
     try {
-      var stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl:  true,
-          sampleRate:       16000,
-          channelCount:     1,
-        },
-        video: false
-      });
-      micStreamRef.current = stream;
+      var stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      micStream.current = stream;
+      runWhisperLoop(stream);
+    } catch(e) {
+      setRecording(false); recordingRef.current = false; whisperRunning.current = false;
+      store.addToast('Mic access denied — allow microphone to capture your answer', 'error');
+    }
+  }
 
-      console.log('[VivaJoin] Groq capture started on student browser');
-      var audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      audioCtxRef.current = audioCtx;
-      var analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 512;
-      var dataArr  = new Uint8Array(analyser.frequencyBinCount);
-      audioCtx.createMediaStreamSource(stream).connect(analyser);
+  function runWhisperLoop(stream) {
+    if (!whisperRunning.current) return;
+    audioChunks.current = [];
 
-      var mimeType    = getMimeType();
-      var mr          = null;
-      var chunks      = [];
-      var isRec       = false;
-      var speechStart = null;
-      var lastSpeech  = null;
-      var silChk      = null;
+    var mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus'
+                 : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm'
+                 : MediaRecorder.isTypeSupported('audio/ogg')  ? 'audio/ogg' : 'audio/mp4';
 
-      function getRMS() {
-        analyser.getByteTimeDomainData(dataArr);
-        var sum = 0;
-        for (var i = 0; i < dataArr.length; i++) { var v = (dataArr[i]-128)/128; sum += v*v; }
-        return Math.sqrt(sum/dataArr.length)*100;
-      }
+    var mr = new MediaRecorder(stream, { mimeType: mimeType });
+    mediaRecRef.current = mr;
 
-      function sendChunkToGroq(blob) {
-        var dur = (lastSpeech || Date.now()) - speechStart;
-        if (blob.size < MIN_BLOB_BYTES || dur < MIN_SPEECH_MS) return;
+    mr.ondataavailable = function(e) {
+      if (e.data && e.data.size > 0) audioChunks.current.push(e.data);
+    };
+
+    mr.onstop = async function() {
+      if (!whisperRunning.current) return;
+      var blob = new Blob(audioChunks.current, { type: mimeType });
+      if (blob.size < 15000) { runWhisperLoop(stream); return; } // skip silence
+
+      try {
         var reader = new FileReader();
         reader.onload = async function() {
+          var base64 = reader.result.split(',')[1];
           try {
-            var base64 = reader.result.split(',')[1];
-            var token  = localStorage.getItem('examai_token') || '';
-            var resp   = await fetch(API + '/ai/transcribe', {
+            var token = localStorage.getItem('examai_token') || '';
+            var resp = await fetch(API + '/ai/transcribe', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
               body: JSON.stringify({ audio: base64, mimeType: mimeType })
             });
             var data = await resp.json();
             var text = (data.text || '').trim();
-            console.log('[VivaJoin] Whisper chunk:', JSON.stringify(text));
-            if (text && captureRef.current) {
-              liveAnsRef.current += text + ' ';
-              var full = liveAnsRef.current.trim();
-              setLiveAnswer(full);
-              // Send live words to admin
+            if (text && recordingRef.current) {
+              liveTextRef.current += text + ' ';
+              var full = liveTextRef.current.trim();
+              setLiveText(full);
+              // Send to admin live
               if (sockRef.current && sockRef.current.connected) {
                 sockRef.current.emit('student-answer-live', {
                   vivaId: roomIdRef.current,
                   text:   full,
                   interim: ''
                 });
-                console.log('[VivaJoin] Emitted student-answer-live:', full.slice(0,50));
-              } else {
-                console.warn('[VivaJoin] Socket not connected, cannot emit answer');
               }
+              clearTimeout(silenceTimer.current);
+              // After 6s of no new chunk → finalize answer
+              silenceTimer.current = setTimeout(function() {
+                if (recordingRef.current) finalizeAnswer();
+              }, 6000);
             }
-          } catch(e) { console.warn('[StudentWhisper]', e); }
+          } catch(err) { console.warn('[VivaJoin Whisper]', err); }
+          if (whisperRunning.current) runWhisperLoop(stream);
         };
         reader.readAsDataURL(blob);
+      } catch(e) {
+        if (whisperRunning.current) runWhisperLoop(stream);
       }
+    };
 
-      function startRec() {
-        if (isRec) return;
-        isRec = true; speechStart = Date.now(); chunks = [];
-        mr = new MediaRecorder(stream, { mimeType: mimeType });
-        mr.ondataavailable = function(e) { if (e.data && e.data.size > 0) chunks.push(e.data); };
-        mr.onstop = function() {
-          if (!captureRef.current) return;
-          sendChunkToGroq(new Blob(chunks, { type: mimeType }));
-        };
-        mr.start();
-      }
-
-      function stopRec() {
-        if (!isRec) return; isRec = false;
-        if (mr && mr.state === 'recording') { try { mr.stop(); } catch(e) {} }
-      }
-
-      clearInterval(vadIvRef.current);
-      vadIvRef.current = setInterval(function() {
-        if (!captureRef.current) { clearInterval(vadIvRef.current); stopRec(); return; }
-        var rms = getRMS();
-        if (rms > SPEECH_THRESHOLD) {
-          lastSpeech = Date.now();
-          if (!isRec) startRec();
-          clearTimeout(silChk); silChk = null;
-        } else if (isRec && !silChk) {
-          silChk = setTimeout(function() { stopRec(); silChk = null; }, 1800);
-        }
-      }, 80);
-
-    } catch(e) {
-      setCapturing(false);
-      captureRef.current = false;
-      store.addToast('Mic access denied — cannot capture answer', 'error');
-    }
+    mr.start();
+    // 6-second chunks — same as VivaPractice
+    whisperTimer.current = setTimeout(function() {
+      if (mr.state === 'recording') mr.stop();
+    }, 6000);
   }
 
-  function stopCapture() {
-    captureRef.current = false;
-    setCapturing(false);
-    clearInterval(vadIvRef.current); vadIvRef.current = null;
-    if (micStreamRef.current) {
-      micStreamRef.current.getTracks().forEach(function(t){ t.stop(); });
-      micStreamRef.current = null;
+  function stopWhisper() {
+    whisperRunning.current = false;
+    recordingRef.current = false;
+    clearTimeout(silenceTimer.current);
+    clearTimeout(whisperTimer.current);
+    setRecording(false);
+    if (mediaRecRef.current && mediaRecRef.current.state !== 'inactive') {
+      try { mediaRecRef.current.stop(); } catch(e) {}
     }
-    if (audioCtxRef.current) {
-      try { audioCtxRef.current.close(); } catch(e) {}
-      audioCtxRef.current = null;
+    mediaRecRef.current = null;
+    if (micStream.current) {
+      micStream.current.getTracks().forEach(function(t) { t.stop(); });
+      micStream.current = null;
     }
   }
 
   function finalizeAnswer() {
-    var full = liveAnsRef.current.trim();
-    stopCapture();
+    var full = liveTextRef.current.trim();
+    stopWhisper();
     if (!full) return;
-    // Send final answer to admin for grading
     if (sockRef.current && sockRef.current.connected) {
       sockRef.current.emit('student-answer-final', {
         vivaId: roomIdRef.current,
         text:   full
       });
     }
-    liveAnsRef.current = '';
-    setLiveAnswer('');
+    liveTextRef.current = '';
+    setLiveText('');
   }
 
   // ── Socket ────────────────────────────────────────────────────────
@@ -222,44 +182,46 @@ export default function VivaJoin() {
       var text  = data.text;
       var noTTS = data.noTTS;
 
-      currentQRef.current = text;
       setCurrentQ(text);
       setQFlash(true);
       setTimeout(function() { setQFlash(false); }, 600);
 
       // Reset previous answer
-      liveAnsRef.current = '';
-      setLiveAnswer('');
-      stopCapture();
+      stopWhisper();
+      liveTextRef.current = '';
+      setLiveText('');
 
-      function afterTTS() {
-        // Start capturing student's answer via Groq Whisper
-        startCapture();
+      function afterQuestion() {
+        // Start Groq Whisper capture — same as VivaPractice
+        startRecording();
       }
 
       if (noTTS) {
-        // Manual: student already heard admin via Jitsi — start capturing
-        setTimeout(afterTTS, 500);
+        // Manual: student heard admin via Jitsi — start mic after short delay
+        setTimeout(afterQuestion, 600);
         return;
       }
 
-      function signalTTSDone() {
+      // Generated: TTS reads question, then start mic
+      function signalDone() {
         if (sock.connected) sock.emit('tts-done', { vivaId: vid });
-        afterTTS();
+        afterQuestion();
       }
 
-      if (!window.speechSynthesis) { signalTTSDone(); return; }
+      if (!window.speechSynthesis) { signalDone(); return; }
       window.speechSynthesis.cancel();
+
       function doSpeak() {
         var utt = new SpeechSynthesisUtterance(text);
         utt.rate = 0.88; utt.lang = 'en-US'; utt.volume = 1;
         var voices = window.speechSynthesis.getVoices();
         var pref = voices.find(function(v){ return v.lang.startsWith('en') && !v.name.includes('compact'); });
         if (pref) utt.voice = pref;
-        utt.onend  = function() { signalTTSDone(); };
-        utt.onerror= function() { signalTTSDone(); };
+        utt.onend  = function() { signalDone(); };
+        utt.onerror= function() { signalDone(); };
         window.speechSynthesis.speak(utt);
       }
+
       if (window.speechSynthesis.getVoices().length > 0) {
         doSpeak();
       } else {
@@ -283,7 +245,7 @@ export default function VivaJoin() {
   }
 
   function leave() {
-    stopCapture();
+    stopWhisper();
     synthRef.current && synthRef.current.cancel();
     if (sockRef.current) { try { sockRef.current.disconnect(); } catch(e){} sockRef.current = null; }
     setPhase('join'); setSession(null); setRoomId('');
@@ -348,7 +310,7 @@ export default function VivaJoin() {
       {/* Question banner */}
       {currentQ ? (
         <div style={{
-          padding: '12px 16px', marginBottom: 12,
+          padding: '12px 16px', marginBottom: 10,
           background: qFlash ? 'rgba(124,58,237,.45)' : 'rgba(124,58,237,.15)',
           border: '2px solid rgba(124,58,237,.5)', borderRadius: 10, transition: 'background .3s'
         }}>
@@ -372,37 +334,44 @@ export default function VivaJoin() {
           <div style={{ fontSize: '1rem', fontWeight: 700, color: '#fff', lineHeight: 1.5 }}>{currentQ}</div>
         </div>
       ) : (
-        <div style={{ padding: '10px 14px', marginBottom: 12, background: 'rgba(255,255,255,.03)', border: '1px solid rgba(255,255,255,.07)', borderRadius: 8, textAlign: 'center', color: '#4b5563', fontSize: '0.8rem' }}>
+        <div style={{ padding: '10px 14px', marginBottom: 10, background: 'rgba(255,255,255,.03)', border: '1px solid rgba(255,255,255,.07)', borderRadius: 8, textAlign: 'center', color: '#4b5563', fontSize: '0.8rem' }}>
           ⏳ Waiting for examiner to ask a question…
         </div>
       )}
 
-      {/* Live answer transcript — shown while capturing */}
+      {/* Live answer transcript */}
       {currentQ && (
-        <div style={{ marginBottom: 12, padding: '10px 14px', background: 'rgba(255,255,255,.04)', border: '1.5px solid ' + (capturing ? '#ef4444' : 'rgba(255,255,255,.08)'), borderRadius: 8, transition: 'border-color .2s' }}>
+        <div style={{
+          marginBottom: 10, padding: '10px 14px',
+          background: 'rgba(255,255,255,.04)',
+          border: '1.5px solid ' + (recording ? '#ef4444' : 'rgba(255,255,255,.08)'),
+          borderRadius: 8, transition: 'border-color .2s'
+        }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              {capturing && <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#ef4444', display: 'inline-block', animation: 'pulse 1s infinite' }}/>}
-              <span style={{ fontSize: '0.65rem', fontWeight: 700, color: capturing ? '#ef4444' : '#9ca3af', letterSpacing: 1, fontFamily: 'JetBrains Mono,monospace' }}>
-                {capturing ? '🎤 CAPTURING YOUR ANSWER' : '📝 YOUR ANSWER'}
+              {recording && (
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#ef4444', display: 'inline-block', animation: 'pulse 1s infinite' }}/>
+              )}
+              <span style={{ fontSize: '0.65rem', fontWeight: 700, color: recording ? '#ef4444' : '#9ca3af', letterSpacing: 1, fontFamily: 'JetBrains Mono,monospace' }}>
+                {recording ? '🎤 CAPTURING VIA GROQ WHISPER' : '📝 YOUR ANSWER'}
               </span>
             </div>
-            {liveAnswer && (
+            {liveText && (
               <button onClick={finalizeAnswer}
                 style={{ background: 'rgba(22,163,74,.2)', border: '1px solid rgba(22,163,74,.4)', borderRadius: 6, padding: '3px 10px', color: '#4ade80', fontSize: '0.7rem', fontWeight: 700, cursor: 'pointer' }}>
-                ✅ Done Speaking
+                ✅ Done
               </button>
             )}
           </div>
-          <div style={{ fontSize: '0.9rem', color: liveAnswer ? '#e5e5e5' : '#4b5563', fontStyle: liveAnswer ? 'normal' : 'italic', lineHeight: 1.65, minHeight: 40 }}>
-            {liveAnswer || (capturing ? 'Speak your answer — Groq Whisper is listening…' : 'Your answer will appear here as you speak')}
+          <div style={{ fontSize: '0.9rem', color: liveText ? '#e5e5e5' : '#4b5563', fontStyle: liveText ? 'normal' : 'italic', lineHeight: 1.65, minHeight: 36 }}>
+            {liveText || (recording ? 'Speak your answer — Groq Whisper is listening…' : 'Mic will start automatically after the question')}
           </div>
         </div>
       )}
 
       {/* Camera */}
       <div className="card" style={{ padding: 8 }}>
-        <JitsiMeet roomName={roomId} displayName={studentName} height={380} role="student" />
+        <JitsiMeet roomName={roomId} displayName={studentName} height={360} role="student" />
       </div>
 
     </div>
