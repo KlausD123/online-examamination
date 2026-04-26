@@ -7,9 +7,9 @@ import { io } from 'socket.io-client';
 var SOCKET_URL = 'https://online-examamination-production.up.railway.app';
 var API        = 'https://online-examamination-production.up.railway.app/api';
 
-var SPEECH_THRESHOLD = 18;
-var MIN_SPEECH_MS    = 500;
-var MIN_BLOB_BYTES   = 15000;
+var SPEECH_THRESHOLD = 12;   // Lowered for student mic — picks up normal speech reliably
+var MIN_SPEECH_MS    = 400;
+var MIN_BLOB_BYTES   = 10000;
 
 function getMimeType() {
   return MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus'
@@ -66,9 +66,19 @@ export default function VivaJoin() {
     setCapturing(true);
 
     try {
-      var stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      var stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl:  true,
+          sampleRate:       16000,
+          channelCount:     1,
+        },
+        video: false
+      });
       micStreamRef.current = stream;
 
+      console.log('[VivaJoin] Groq capture started on student browser');
       var audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       audioCtxRef.current = audioCtx;
       var analyser = audioCtx.createAnalyser();
@@ -106,6 +116,7 @@ export default function VivaJoin() {
             });
             var data = await resp.json();
             var text = (data.text || '').trim();
+            console.log('[VivaJoin] Whisper chunk:', JSON.stringify(text));
             if (text && captureRef.current) {
               liveAnsRef.current += text + ' ';
               var full = liveAnsRef.current.trim();
@@ -117,6 +128,9 @@ export default function VivaJoin() {
                   text:   full,
                   interim: ''
                 });
+                console.log('[VivaJoin] Emitted student-answer-live:', full.slice(0,50));
+              } else {
+                console.warn('[VivaJoin] Socket not connected, cannot emit answer');
               }
             }
           } catch(e) { console.warn('[StudentWhisper]', e); }

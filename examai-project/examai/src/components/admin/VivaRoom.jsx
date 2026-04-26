@@ -437,24 +437,9 @@ export default function VivaRoom() {
       }
     });
 
-    // ── Student answer relay ─────────────────────────────────────────────
-    // Live words streaming from student's mic
-    sock.on('student-answer-live', function(data) {
-      capturedRef.current = data.text || '';
-      setCapturedText(data.text || '');
-      if (data.interim) setLiveWords(data.interim);
-    });
-
-    // Final answer from student (after silence or Done button)
-    sock.on('student-answer-final', function(data) {
-      capturedRef.current = data.text || '';
-      setCapturedText(data.text || '');
-      setLiveWords('');
-      // Auto-grade if we're in listening state
-      if (flowRef.current === 'listening' && data.text && data.text.trim().length > 0) {
-        setTimeout(function() { doGradeAndWait(data.text); }, 300);
-      }
-    });
+    // ── Student answer relay handled by connectAdminSocket ─────────────
+    // Do not add student-answer listeners here — connectAdminSocket handles them
+    // to avoid duplicate processing from two admin sockets in the same room
   }
 
   function doMakeOffer(sock, vivaId, stream) {
@@ -593,24 +578,27 @@ export default function VivaRoom() {
       }
     });
 
-    // Student sends live words as they speak → show in admin capture box
+    // Student sends live Groq Whisper transcript chunks as they speak
     sock.on('student-answer-live', function(data) {
-      if (flowRef.current !== 'listening') return;
-      capturedRef.current = data.text || '';
-      setCapturedText(data.text || '');
+      var text = data.text || '';
+      capturedRef.current = text;
+      setCapturedText(text);
       setLiveWords(data.interim || '');
-      clearTimeout(silenceTimer.current);
+      // If we're listening, reset silence timer
+      if (flowRef.current === 'listening') {
+        clearTimeout(silenceTimer.current);
+      }
     });
 
-    // Student finalized answer → auto-grade
+    // Student finalized answer via Groq Whisper → auto-grade
     sock.on('student-answer-final', function(data) {
-      if (flowRef.current !== 'listening') return;
-      capturedRef.current = data.text || '';
-      setCapturedText(data.text || '');
+      var text = data.text || '';
+      capturedRef.current = text;
+      setCapturedText(text);
       setLiveWords('');
       clearTimeout(silenceTimer.current);
-      if (data.text && data.text.trim()) {
-        setTimeout(doGradeAndWait, 300);
+      if (text.trim() && flowRef.current === 'listening') {
+        setTimeout(function() { doGradeAndWait(text); }, 400);
       }
     });
 
