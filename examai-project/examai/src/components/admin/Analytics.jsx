@@ -341,7 +341,7 @@ export default function Analytics() {
             ? <div className="empty-state"><div className="empty-state-icon">🎙</div><div className="empty-state-title">No viva results yet</div></div>
             : <div>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
-                <div style={{ fontWeight:700, fontSize:'1.05rem' }}>🎙 Viva Results — Student Wise</div>
+                <div style={{ fontWeight:700, fontSize:'1.05rem' }}>🎙 Viva Results — Student Wise ({vivaResults.length})</div>
                 <button className="btn btn-outline btn-sm" onClick={function(){
                   var rows = ['Student,Email,Session,Topic,Score (%),Grade,Correct,Total,Visible,Date'];
                   (vivaResults||[]).forEach(function(r){
@@ -399,7 +399,6 @@ export default function Analytics() {
                             color: r.result_visible?'#4ade80':'#fbbf24', fontSize:'0.72rem', fontWeight:700, cursor:'pointer' }}
                           onClick={function() {
                             var newVis = !r.result_visible;
-                            apiGet('/viva/'+r.viva_id+'/results-csv-data').then(function(){}).catch(function(){});
                             fetch('https://online-examamination-production.up.railway.app/api/viva/'+r.viva_id+'/result/'+r.result_id+'/visibility', {
                               method:'POST',
                               headers:{'Content-Type':'application/json','Authorization':'Bearer '+localStorage.getItem('examai_token')},

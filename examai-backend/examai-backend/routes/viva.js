@@ -31,20 +31,20 @@ router.get('/', requireAdmin, async (req, res) => {
   }
 });
 
-// Get all viva results for admin (student-wise)
+// Get all viva results for admin (student-wise) — all sessions visible to any admin
 router.get('/all-results', requireAdmin, async (req, res) => {
   try {
     const [results] = await pool.query(`
-      SELECT vr.result_id, vr.student_name, vr.total_score, vr.grade,
-        vr.correct_count, vr.total_questions, vr.result_visible, vr.created_at,
+      SELECT vr.result_id, vr.viva_id, vr.student_id, vr.student_name,
+        vr.total_score, vr.grade, vr.correct_count, vr.total_questions,
+        vr.result_visible, vr.created_at,
         vs.title, vs.topic, vs.course_id,
         u.email as student_email
       FROM viva_results vr
       JOIN viva_sessions vs ON vr.viva_id = vs.viva_id
       LEFT JOIN users u ON vr.student_id = u.user_id
-      WHERE vs.created_by = ?
       ORDER BY vr.created_at DESC
-    `, [req.user.user_id]);
+    `);
     res.json(results);
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
