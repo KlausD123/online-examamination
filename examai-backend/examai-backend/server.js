@@ -86,6 +86,12 @@ app.post('/api/ai/transcribe', require('./middleware/auth').authenticateToken, a
       'Content-Disposition: form-data; name="model"' + CRLF + CRLF +
       'whisper-large-v3-turbo' +
       CRLF + '--' + boundary + CRLF +
+      'Content-Disposition: form-data; name="language"' + CRLF + CRLF +
+      'en' +
+      CRLF + '--' + boundary + CRLF +
+      'Content-Disposition: form-data; name="prompt"' + CRLF + CRLF +
+      'Student answering exam questions in English.' +
+      CRLF + '--' + boundary + CRLF +
       'Content-Disposition: form-data; name="response_format"' + CRLF + CRLF +
       'json' +
       CRLF + '--' + boundary + '--' + CRLF
