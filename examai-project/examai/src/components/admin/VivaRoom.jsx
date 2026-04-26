@@ -582,13 +582,14 @@ export default function VivaRoom() {
       }
     });
 
-    // Student TTS finished reading the question → now safe to start Whisper
+    // Student TTS finished → switch admin to listening state
+    // Student's browser starts Groq Whisper capture automatically after TTS
     sock.on('tts-done', function() {
       clearTimeout(ttsWaitTimer.current);
       if (flowRef.current === 'speaking') {
         setFlow('listening'); flowRef.current = 'listening';
         setStatusMsg('');
-        startSTT();
+        // No local STT — student sends transcript via socket
       }
     });
 
@@ -631,64 +632,45 @@ export default function VivaRoom() {
       store.addToast('Socket not connected — student may not receive question', 'warning');
     }
 
+    // Admin hears question via local TTS for their own reference
+    setFlow('speaking'); flowRef.current = 'speaking';
+    setStatusMsg('');
+
+    function switchToListening() {
+      if (flowRef.current !== 'speaking') return;
+      setFlow('listening'); flowRef.current = 'listening';
+      setStatusMsg('Waiting for student answer via Groq Whisper…');
+      // Student's browser captures answer and sends via socket — no local STT needed
+    }
+
+    if (synthRef.current && window.speechSynthesis) {
+      synthRef.current.cancel();
+      var uttAdmin = new SpeechSynthesisUtterance(text);
+      uttAdmin.rate = 0.9; uttAdmin.lang = 'en-US';
+      uttAdmin.onend = uttAdmin.onerror = function() {};
+      synthRef.current.speak(uttAdmin);
+    }
+
     if (noTTS) {
-      // Manual mode: student already heard admin's live voice via Jitsi
-      // Admin reads own question text aloud too (confirmation), then start Whisper
-      setFlow('speaking'); flowRef.current = 'speaking';
-      setStatusMsg('');
-      if (synthRef.current && window.speechSynthesis) {
-        synthRef.current.cancel();
-        var utt = new SpeechSynthesisUtterance(text);
-        utt.rate = 0.9; utt.lang = 'en-US';
-        var done = false;
-        function afterAdminTTS() {
-          if (done) return; done = true;
-          setFlow('listening'); flowRef.current = 'listening';
-          setStatusMsg('');
-          setTimeout(startSTT, 400);
-        }
-        utt.onend = afterAdminTTS; utt.onerror = afterAdminTTS;
-        synthRef.current.speak(utt);
-        // Fallback
-        setTimeout(function() { if (flowRef.current === 'speaking') afterAdminTTS(); }, Math.max(3000, text.length * 75 + 1500));
-      } else {
-        setFlow('listening'); flowRef.current = 'listening';
-        setTimeout(startSTT, 800);
-      }
+      // Manual: admin spoke live — switch to listening after short confirmation TTS
+      var manualMs = Math.max(2000, text.length * 60 + 800);
+      ttsWaitTimer.current = setTimeout(switchToListening, manualMs);
     } else {
-      // Generated mode: admin hears question via TTS, student TTS plays on their device
-      setFlow('speaking'); flowRef.current = 'speaking';
-      setStatusMsg('');
-      // Admin TTS plays question aloud
-      if (synthRef.current && window.speechSynthesis) {
-        synthRef.current.cancel();
-        var utt2 = new SpeechSynthesisUtterance(text);
-        utt2.rate = 0.9; utt2.lang = 'en-US';
-        utt2.onend = utt2.onerror = function() { /* admin TTS done — now wait for student tts-done */ };
-        synthRef.current.speak(utt2);
-      }
-      // Wait for student tts-done signal; fallback timer as safety net
+      // Generated: wait for student tts-done signal; fallback after estimated duration
       var estimatedMs = Math.max(4000, text.length * 75 + 2000);
-      ttsWaitTimer.current = setTimeout(function() {
-        if (flowRef.current === 'speaking') {
-          setFlow('listening'); flowRef.current = 'listening';
-          setStatusMsg('');
-          startSTT();
-        }
-      }, estimatedMs);
+      ttsWaitTimer.current = setTimeout(switchToListening, estimatedMs);
     }
   }
 
-  // ── Groq Whisper STT — records admin mic (hears student via Jitsi) ──
-  var ttsWaitTimer   = useRef(null);   // Fallback timer waiting for student TTS to finish
-  var mediaRecRef    = useRef(null);   // MediaRecorder
+  // ── Groq Whisper STT refs ──────────────────────────────────────────
+  var ttsWaitTimer   = useRef(null);
+  var mediaRecRef    = useRef(null);
   var audioChunks    = useRef([]);
   var whisperTimer   = useRef(null);
   var whisperRunning = useRef(false);
-  var audioCtxRef    = useRef(null);   // AudioContext for mixing tab + mic
-  var tabStreamsRef   = useRef([]);    // All captured streams for cleanup
-  var audioCtxRef    = useRef(null);   // AudioContext for mixing tab + mic audio
-  var tabStreamsRef   = useRef([]);    // Tab/mic MediaStream tracks for cleanup
+  var audioCtxRef    = useRef(null);
+  var tabStreamsRef   = useRef([]);
+  var vadIntervalRef  = useRef(null);
 
   async function startSTT() {
     stopSTT();
@@ -762,71 +744,118 @@ export default function VivaRoom() {
 
   function startWhisperLoop(stream) {
     if (!whisperRunning.current) return;
-    audioChunks.current = [];
 
-    // Pick best supported format
     var mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus'
                  : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm'
-                 : MediaRecorder.isTypeSupported('audio/ogg') ? 'audio/ogg'
-                 : 'audio/mp4';
+                 : MediaRecorder.isTypeSupported('audio/ogg') ? 'audio/ogg' : 'audio/mp4';
 
-    var mr = new MediaRecorder(stream, { mimeType: mimeType });
-    mediaRecRef.current = mr;
+    // ── Voice Activity Detection via AnalyserNode ──────────────────
+    // Only record when student is actually speaking — stops hallucinations on silence
+    var vadCtx      = audioCtxRef.current || new (window.AudioContext || window.webkitAudioContext)();
+    var analyser    = vadCtx.createAnalyser();
+    analyser.fftSize = 512;
+    var dataArr     = new Uint8Array(analyser.frequencyBinCount);
+    var src         = vadCtx.createMediaStreamSource(stream);
+    src.connect(analyser);
 
-    mr.ondataavailable = function(e) {
-      if (e.data && e.data.size > 0) audioChunks.current.push(e.data);
-    };
+    var SPEECH_THRESHOLD = 18;   // RMS level above this = speech detected
+    var SILENCE_MS       = 1800; // stop recording after 1.8s of silence
+    var MIN_SPEECH_MS    = 800;  // must speak for at least 0.8s before we accept
 
-    mr.onstop = async function() {
-      if (!whisperRunning.current) return;
-      if (audioChunks.current.length === 0) { startWhisperLoop(stream); return; }
-      var blob = new Blob(audioChunks.current, { type: mimeType });
-      // Skip tiny blobs (silence) — Whisper min is ~0.1s
-      if (blob.size < 15000) { startWhisperLoop(stream); return; } // skip silence/tiny chunks
+    var mr           = null;
+    var chunks       = [];
+    var isRecording  = false;
+    var speechStart  = null;
+    var lastSpeech   = null;
+    var silenceCheck = null;
 
-      // Convert to base64 and send to backend
-      try {
-        var reader = new FileReader();
-        reader.onload = async function() {
-          var base64 = reader.result.split(',')[1];
-          try {
-            var resp = await fetch(API + '/ai/transcribe', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('examai_token') },
-              body: JSON.stringify({ audio: base64, mimeType: mimeType })
-            });
-            var data = await resp.json();
-            var text = (data.text || '').trim();
-            if (text && flowRef.current === 'listening') {
-              capturedRef.current += text + ' ';
-              setCapturedText(capturedRef.current.trim());
-              setLiveWords('');
-              clearTimeout(silenceTimer.current);
-              silenceTimer.current = setTimeout(function() {
-                if (flowRef.current === 'listening' && capturedRef.current.trim().length > 0) doGradeAndWait();
-              }, 5000);
-            }
-          } catch(err) { console.warn('[Whisper] fetch error:', err); }
-          // Continue loop
-          if (whisperRunning.current) startWhisperLoop(stream);
-        };
-        reader.readAsDataURL(blob);
-      } catch(e) {
-        if (whisperRunning.current) startWhisperLoop(stream);
+    function getRMS() {
+      analyser.getByteTimeDomainData(dataArr);
+      var sum = 0;
+      for (var i = 0; i < dataArr.length; i++) {
+        var v = (dataArr[i] - 128) / 128;
+        sum += v * v;
       }
-    };
+      return Math.sqrt(sum / dataArr.length) * 100;
+    }
 
-    mr.start();
-    // Record in 6-second chunks — good balance of latency vs accuracy
-    whisperTimer.current = setTimeout(function() {
-      if (mr.state === 'recording') mr.stop();
-    }, 6000);
+    function startRecording() {
+      if (isRecording) return;
+      isRecording = true;
+      speechStart = Date.now();
+      chunks = [];
+      mr = new MediaRecorder(stream, { mimeType: mimeType });
+      mr.ondataavailable = function(e) { if (e.data && e.data.size > 0) chunks.push(e.data); };
+      mr.onstop = async function() {
+        if (!whisperRunning.current) return;
+        var blob = new Blob(chunks, { type: mimeType });
+        // Only transcribe if we have enough audio and speech lasted long enough
+        var speechDuration = (lastSpeech || Date.now()) - speechStart;
+        if (blob.size < 15000 || speechDuration < MIN_SPEECH_MS) return;
+        try {
+          var reader = new FileReader();
+          reader.onload = async function() {
+            var base64 = reader.result.split(',')[1];
+            try {
+              var resp = await fetch(API + '/ai/transcribe', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('examai_token') },
+                body: JSON.stringify({ audio: base64, mimeType: mimeType })
+              });
+              var data = await resp.json();
+              var text = (data.text || '').trim();
+              if (text && flowRef.current === 'listening') {
+                capturedRef.current += text + ' ';
+                setCapturedText(capturedRef.current.trim());
+                setLiveWords('');
+                clearTimeout(silenceTimer.current);
+                silenceTimer.current = setTimeout(function() {
+                  if (flowRef.current === 'listening' && capturedRef.current.trim().length > 0) doGradeAndWait();
+                }, 5000);
+              }
+            } catch(err) { console.warn('[Whisper] fetch error:', err); }
+          };
+          reader.readAsDataURL(blob);
+        } catch(e) {}
+      };
+      mr.start();
+      mediaRecRef.current = mr;
+    }
+
+    function stopRecording() {
+      if (!isRecording) return;
+      isRecording = false;
+      if (mr && mr.state === 'recording') { try { mr.stop(); } catch(e) {} }
+    }
+
+    // Poll voice level every 80ms
+    vadIntervalRef.current = setInterval(function() {
+      if (!whisperRunning.current) {
+        clearInterval(vadIntervalRef.current);
+        stopRecording();
+        try { src.disconnect(); analyser.disconnect(); } catch(e) {}
+        return;
+      }
+      var rms = getRMS();
+      if (rms > SPEECH_THRESHOLD) {
+        lastSpeech = Date.now();
+        if (!isRecording) startRecording();
+        clearTimeout(silenceCheck);
+        silenceCheck = null;
+      } else if (isRecording && !silenceCheck) {
+        silenceCheck = setTimeout(function() {
+          stopRecording();
+          silenceCheck = null;
+        }, SILENCE_MS);
+      }
+    }, 80);
   }
 
   function stopSTT() {
     whisperRunning.current = false;
     clearTimeout(silenceTimer.current);
     clearTimeout(whisperTimer.current);
+    clearInterval(vadIntervalRef.current); vadIntervalRef.current = null;
     setLiveWords('');
     if (mediaRecRef.current && mediaRecRef.current.state !== 'inactive') {
       try { mediaRecRef.current.stop(); } catch(e) {}
@@ -983,6 +1012,7 @@ export default function VivaRoom() {
   var adminMRTimer    = useRef(null);
   var adminMRRunning  = useRef(false);
   var adminMicStream  = useRef(null);
+  var adminVADRef     = useRef(null);   // VAD interval for admin question recording
 
   var mqPhaseRef = useRef('idle');
   useEffect(function() { mqPhaseRef.current = mqPhase; }, [mqPhase]);
@@ -1007,60 +1037,100 @@ export default function VivaRoom() {
 
   function runAdminWhisperLoop(stream) {
     if (!adminMRRunning.current) return;
-    adminChunks.current = [];
 
     var mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus'
                  : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm'
                  : MediaRecorder.isTypeSupported('audio/ogg')  ? 'audio/ogg' : 'audio/mp4';
 
-    var mr = new MediaRecorder(stream, { mimeType: mimeType });
-    adminMRRef.current = mr;
+    // ── VAD — only record when admin is actually speaking ──────────
+    var vadCtx   = new (window.AudioContext || window.webkitAudioContext)();
+    var analyser = vadCtx.createAnalyser();
+    analyser.fftSize = 512;
+    var dataArr  = new Uint8Array(analyser.frequencyBinCount);
+    var src      = vadCtx.createMediaStreamSource(stream);
+    src.connect(analyser);
 
-    mr.ondataavailable = function(e) {
-      if (e.data && e.data.size > 0) adminChunks.current.push(e.data);
-    };
+    var SPEECH_THRESHOLD = 18;
+    var SILENCE_MS       = 1500; // slightly shorter for question recording — admin pauses less
+    var MIN_SPEECH_MS    = 500;
 
-    mr.onstop = async function() {
-      if (!adminMRRunning.current) return;
-      var blob = new Blob(adminChunks.current, { type: mimeType });
-      if (blob.size < 3000) { runAdminWhisperLoop(stream); return; }
+    var mr          = null;
+    var chunks      = [];
+    var isRecording = false;
+    var speechStart = null;
+    var lastSpeech  = null;
+    var silenceChk  = null;
 
-      try {
-        var reader = new FileReader();
-        reader.onload = async function() {
-          var base64 = reader.result.split(',')[1];
-          try {
-            var resp = await fetch(API + '/ai/transcribe', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('examai_token') },
-              body: JSON.stringify({ audio: base64, mimeType: mimeType })
-            });
-            var data = await resp.json();
-            var text = (data.text || '').trim();
-            if (text && adminMRRunning.current) {
-              manualQRef.current += text + ' ';
-              setManualQText(manualQRef.current.trim());
-              setLiveWords('');
-            }
-          } catch(err) { console.warn('[AdminWhisper] error:', err); }
-          if (adminMRRunning.current) runAdminWhisperLoop(stream);
-        };
-        reader.readAsDataURL(blob);
-      } catch(e) {
-        if (adminMRRunning.current) runAdminWhisperLoop(stream);
+    function getRMS() {
+      analyser.getByteTimeDomainData(dataArr);
+      var sum = 0;
+      for (var i = 0; i < dataArr.length; i++) { var v = (dataArr[i]-128)/128; sum += v*v; }
+      return Math.sqrt(sum/dataArr.length)*100;
+    }
+
+    function startRec() {
+      if (isRecording) return;
+      isRecording = true; speechStart = Date.now(); chunks = [];
+      mr = new MediaRecorder(stream, { mimeType: mimeType });
+      mr.ondataavailable = function(e) { if (e.data && e.data.size > 0) chunks.push(e.data); };
+      mr.onstop = async function() {
+        if (!adminMRRunning.current) return;
+        var blob = new Blob(chunks, { type: mimeType });
+        var dur  = (lastSpeech || Date.now()) - speechStart;
+        if (blob.size < 15000 || dur < MIN_SPEECH_MS) return;
+        try {
+          var reader = new FileReader();
+          reader.onload = async function() {
+            var base64 = reader.result.split(',')[1];
+            try {
+              var resp = await fetch(API + '/ai/transcribe', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('examai_token') },
+                body: JSON.stringify({ audio: base64, mimeType: mimeType })
+              });
+              var data = await resp.json();
+              var text = (data.text || '').trim();
+              if (text && adminMRRunning.current) {
+                manualQRef.current += text + ' ';
+                setManualQText(manualQRef.current.trim());
+                setLiveWords('');
+              }
+            } catch(err) { console.warn('[AdminWhisper] error:', err); }
+          };
+          reader.readAsDataURL(blob);
+        } catch(e) {}
+      };
+      mr.start(); adminMRRef.current = mr;
+    }
+
+    function stopRec() {
+      if (!isRecording) return; isRecording = false;
+      if (mr && mr.state === 'recording') { try { mr.stop(); } catch(e) {} }
+    }
+
+    clearInterval(adminVADRef.current);
+    adminVADRef.current = setInterval(function() {
+      if (!adminMRRunning.current) {
+        clearInterval(adminVADRef.current);
+        stopRec();
+        try { src.disconnect(); analyser.disconnect(); vadCtx.close(); } catch(e) {}
+        return;
       }
-    };
-
-    mr.start();
-    // 4-second chunks — shorter for question capture so transcript builds fast
-    adminMRTimer.current = setTimeout(function() {
-      if (mr.state === 'recording') mr.stop();
-    }, 4000);
+      var rms = getRMS();
+      if (rms > SPEECH_THRESHOLD) {
+        lastSpeech = Date.now();
+        if (!isRecording) startRec();
+        clearTimeout(silenceChk); silenceChk = null;
+      } else if (isRecording && !silenceChk) {
+        silenceChk = setTimeout(function() { stopRec(); silenceChk = null; }, SILENCE_MS);
+      }
+    }, 80);
   }
 
   function stopAdminWhisper() {
     adminMRRunning.current = false;
     clearTimeout(adminMRTimer.current);
+    clearInterval(adminVADRef.current); adminVADRef.current = null;
     if (adminMRRef.current && adminMRRef.current.state !== 'inactive') {
       try { adminMRRef.current.stop(); } catch(e) {}
     }
